@@ -80,6 +80,8 @@ Any [ISO 4217 currency code](https://en.wikipedia.org/wiki/ISO_4217#List_of_ISO_
 
 The currency setting applies everywhere: dashboard, status bar, menu bar widget, CSV/JSON exports, and JSON API output.
 
+The menu bar widget also includes a currency picker with 16 common currencies. For any currency not listed in the menu bar, use the CLI command above.
+
 ## What it tracks
 
 **13 task categories** classified from tool usage patterns and user message keywords. No LLM calls, fully deterministic.
