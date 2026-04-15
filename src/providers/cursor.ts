@@ -179,6 +179,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
           && dbSize >= cache.dbSizeBytes
         const afterTimestamp = cacheValid ? cache.lastCreatedAt : undefined
 
+        await new Promise(r => setTimeout(r, 0))
+
         const { calls, maxCreatedAt } = parseBubbles(db, seenKeys, afterTimestamp)
 
         if (maxCreatedAt > 0) {
