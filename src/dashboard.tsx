@@ -304,11 +304,16 @@ function ActivityBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; p
   )
 }
 
-function ToolBreakdown({ projects, pw, bw, title }: { projects: ProjectSummary[]; pw: number; bw: number; title?: string }) {
+function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: ProjectSummary[]; pw: number; bw: number; title?: string; filterPrefix?: string }) {
   const toolTotals: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [tool, data] of Object.entries(session.toolBreakdown)) {
+        if (filterPrefix) {
+          if (!tool.startsWith(filterPrefix)) continue
+        } else {
+          if (tool.startsWith('lang:')) continue
+        }
         toolTotals[tool] = (toolTotals[tool] ?? 0) + data.calls
       }
     }
@@ -492,7 +497,7 @@ function DashboardContent({ projects, period, columns, activeProvider }: { proje
       </Row>
 
       {isCursor ? (
-        <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" />
+        <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
       ) : (
         <>
           <Row wide={wide} width={dashWidth}>

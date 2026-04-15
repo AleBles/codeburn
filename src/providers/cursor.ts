@@ -86,6 +86,18 @@ const BUBBLE_QUERY_BASE = `
     AND json_extract(value, '$.tokenCount.inputTokens') > 0
 `
 
+const USER_MESSAGES_QUERY = `
+  SELECT
+    json_extract(value, '$.conversationId') as conversation_id,
+    json_extract(value, '$.createdAt') as created_at,
+    substr(json_extract(value, '$.text'), 1, 500) as text
+  FROM cursorDiskKV
+  WHERE key LIKE 'bubbleId:%'
+    AND json_extract(value, '$.type') = 1
+    AND json_extract(value, '$.createdAt') > ?
+  ORDER BY json_extract(value, '$.createdAt') ASC
+`
+
 const BUBBLE_QUERY_SINCE = BUBBLE_QUERY_BASE + `
     AND json_extract(value, '$.createdAt') > ?
   ORDER BY json_extract(value, '$.createdAt') ASC
@@ -102,12 +114,30 @@ function validateSchema(db: SqliteDatabase): boolean {
   }
 }
 
+type UserMsgRow = { conversation_id: string; created_at: string; text: string }
+
+function buildUserMessageMap(db: SqliteDatabase, timeFloor: string): Map<string, string[]> {
+  const map = new Map<string, string[]>()
+  try {
+    const rows = db.query<UserMsgRow>(USER_MESSAGES_QUERY, [timeFloor])
+    for (const row of rows) {
+      if (!row.conversation_id || !row.text) continue
+      const existing = map.get(row.conversation_id) ?? []
+      existing.push(row.text)
+      map.set(row.conversation_id, existing)
+    }
+  } catch {}
+  return map
+}
+
 function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: ParsedProviderCall[] } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
 
   const DEFAULT_LOOKBACK_DAYS = 120
   const timeFloor = new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString()
+
+  const userMessages = buildUserMessageMap(db, timeFloor)
 
   let rows: BubbleRow[]
   try {
@@ -135,9 +165,13 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
       const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
 
       const timestamp = createdAt || ''
-      const userText = row.user_text ?? ''
+      const convMessages = userMessages.get(conversationId) ?? []
+      const userText = convMessages.length > 0 ? convMessages.shift()! : (row.user_text ?? '')
 
       const languages = extractLanguages(row.code_blocks)
+      const hasCode = languages.length > 0
+
+      const cursorTools: string[] = hasCode ? ['Edit', ...languages.map(l => `lang:${l}`)] : []
 
       results.push({
         provider: 'cursor',
@@ -150,7 +184,7 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>): { calls: Parse
         reasoningTokens: 0,
         webSearchRequests: 0,
         costUSD,
-        tools: languages,
+        tools: cursorTools,
         timestamp,
         speed: 'standard',
         deduplicationKey: dedupKey,
@@ -215,6 +249,9 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
     },
 
     toolDisplayName(rawTool: string): string {
+      if (rawTool === 'Edit') return 'Edit'
+      const lang = rawTool.startsWith('lang:') ? rawTool.slice(5) : null
+      if (!lang) return rawTool
       const langNames: Record<string, string> = {
         javascript: 'JavaScript',
         typescript: 'TypeScript',
@@ -244,7 +281,7 @@ export function createCursorProvider(dbPathOverride?: string): Provider {
         dockerfile: 'Dockerfile',
         toml: 'TOML',
       }
-      return langNames[rawTool] ?? rawTool
+      return langNames[lang] ?? lang
     },
 
     async discoverSessions(): Promise<SessionSource[]> {
