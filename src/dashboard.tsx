@@ -3,6 +3,7 @@ import { homedir } from 'os'
 import React, { useState, useCallback, useEffect } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
+import { ScrollPanel } from './components/scroll-panel'
 import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions } from './parser.js'
 import { loadPricing } from './models.js'
@@ -112,7 +113,7 @@ function HBar({ value, max, width }: { value: number; max: number; width: number
 
 function Panel({ title, color, children, width }: { title: string; color: string; children: React.ReactNode; width: number }) {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} width={width} overflowX="hidden">
+    <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} width={width}>
       <Text bold color={color}>{title}</Text>
       {children}
     </Box>
@@ -415,12 +416,16 @@ function PeriodTabs({ active, providerName, showProvider }: {
 
 function StatusBar({ width, showProvider }: { width: number; showProvider?: boolean }) {
   return (
-    <Box borderStyle="round" borderColor={DIM} width={width} justifyContent="center" paddingX={1}>
+    <Box borderStyle="round" borderColor={DIM} width={width} flexDirection="column" alignItems="center" paddingX={1}>
       <Text>
-        <Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text>
-        <Text dimColor> switch   </Text>
+        <Text color={ORANGE} bold>{'←'}</Text><Text color={ORANGE}>{'→'}</Text>
+        <Text dimColor> switch  </Text>
+        <Text color={ORANGE} bold>{'↑ / PgUp'}</Text><Text color={ORANGE}>{'↓ / PgDn'}</Text>
+        <Text dimColor> scroll </Text>
         <Text color={ORANGE} bold>q</Text>
-        <Text dimColor> quit   </Text>
+        <Text dimColor> quit</Text>
+      </Text>
+      <Text>
         <Text color={ORANGE} bold>1</Text>
         <Text dimColor> today   </Text>
         <Text color={ORANGE} bold>2</Text>
@@ -446,9 +451,14 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns }: { projects: ProjectSummary[]; period: Period; columns?: number }) {
+const FIXED_ROWS = 10 // PeriodTabs(1) + Overview(5) + StatusBar(4)
+function DashboardContent({ projects, period, columns, scrollHeight }: {
+  projects: ProjectSummary[]
+  period: Period
+  columns?: number
+  scrollHeight?: number
+}) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
-
   if (projects.length === 0) {
     return (
       <Panel title="CodeBurn" color={ORANGE} width={dashWidth}>
@@ -458,27 +468,35 @@ function DashboardContent({ projects, period, columns }: { projects: ProjectSumm
   }
 
   const pw = wide ? halfWidth : dashWidth
+  const content = (
+      <>
+        <Row wide={wide} width={dashWidth}>
+          <DailyActivity projects={projects} days={period === 'month' || period === '30days' ? 31 : 14} pw={pw} bw={barWidth} />
+          <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />
+        </Row>
+
+        <Row wide={wide} width={dashWidth}>
+          <ActivityBreakdown projects={projects} pw={pw} bw={barWidth} />
+          <ModelBreakdown projects={projects} pw={pw} bw={barWidth} />
+        </Row>
+
+        <Row wide={wide} width={dashWidth}>
+          <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />
+          <BashBreakdown projects={projects} pw={pw} bw={barWidth} />
+        </Row>
+
+        <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
+      </>
+  )
 
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
-
-      <Row wide={wide} width={dashWidth}>
-        <DailyActivity projects={projects} days={period === 'month' || period === '30days' ? 31 : 14} pw={pw} bw={barWidth} />
-        <ProjectBreakdown projects={projects} pw={pw} bw={barWidth} />
-      </Row>
-
-      <Row wide={wide} width={dashWidth}>
-        <ActivityBreakdown projects={projects} pw={pw} bw={barWidth} />
-        <ModelBreakdown projects={projects} pw={pw} bw={barWidth} />
-      </Row>
-
-      <Row wide={wide} width={dashWidth}>
-        <ToolBreakdown projects={projects} pw={pw} bw={barWidth} />
-        <BashBreakdown projects={projects} pw={pw} bw={barWidth} />
-      </Row>
-
-      <McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} />
+      {scrollHeight != null ? (
+        <ScrollPanel height={scrollHeight}>{content}</ScrollPanel>
+      ) : (
+        content
+      )}
     </Box>
   )
 }
@@ -496,8 +514,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const [activeProvider, setActiveProvider] = useState(initialProvider)
   const [detectedProviders, setDetectedProviders] = useState<string[]>([])
   const { columns } = useWindowSize()
+  const totalRows = Math.max(process.stdout.rows, FIXED_ROWS)
   const { dashWidth } = getLayout(columns)
   const multipleProviders = detectedProviders.length > 1
+  const scrollHeight = totalRows - FIXED_ROWS
 
   useEffect(() => {
     let cancelled = false
@@ -567,7 +587,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
 
   if (loading) {
     return (
-      <Box flexDirection="column" width={dashWidth}>
+      <Box flexDirection="column" width={dashWidth} height={totalRows}>
         <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
         <Panel title="CodeBurn" color={ORANGE} width={dashWidth}>
           <Text dimColor>Loading {PERIOD_LABELS[period]}...</Text>
@@ -578,9 +598,9 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   }
 
   return (
-    <Box flexDirection="column" width={dashWidth}>
+    <Box flexDirection="column" width={dashWidth} height={totalRows}>
       <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-      <DashboardContent projects={projects} period={period} columns={columns} />
+      <DashboardContent projects={projects} period={period} columns={columns} scrollHeight={scrollHeight} />
       <StatusBar width={dashWidth} showProvider={multipleProviders} />
     </Box>
   )
