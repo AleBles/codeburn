@@ -96,6 +96,12 @@ const JUNK_PATTERN = new RegExp(`/(?:${JUNK_DIRS.join('|')})/`)
 
 const SHELL_PROFILES = ['.zshrc', '.bashrc', '.bash_profile', '.profile']
 
+const TOP_ITEMS_PREVIEW = 3
+const MISSING_IGNORE_PATHS_PREVIEW = 2
+const JUNK_DIRS_IGNORE_PREVIEW = 8
+const GHOST_NAMES_PREVIEW = 5
+const GHOST_CLEANUP_COMMANDS_LIMIT = 10
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -396,7 +402,7 @@ export function detectJunkReads(calls: ToolCall[], dateRange?: DateRange): Waste
   if (trend === 'resolved') return null
 
   const sorted = [...dirCounts.entries()].sort((a, b) => b[1] - a[1])
-  const dirList = sorted.slice(0, 3).map(([d, n]) => `${d}/ (${n}x)`).join(', ')
+  const dirList = sorted.slice(0, TOP_ITEMS_PREVIEW).map(([d, n]) => `${d}/ (${n}x)`).join(', ')
   const tokensSaved = totalJunkReads * AVG_TOKENS_PER_READ
 
   const detected = sorted.map(([d]) => d)
@@ -458,7 +464,7 @@ export function detectDuplicateReads(calls: ToolCall[], dateRange?: DateRange): 
 
   const worst = [...fileDupes.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
+    .slice(0, TOP_ITEMS_PREVIEW)
     .map(([name, n]) => `${name} (${n + 1}x)`)
     .join(', ')
 
@@ -542,9 +548,9 @@ export function detectMissingClaudeignore(projectCwds: Set<string>): WasteFindin
   if (missing.length === 0) return null
 
   const shortPaths = missing.map(shortHomePath)
-  const display = shortPaths.length <= 3
+  const display = shortPaths.length <= MISSING_IGNORE_PATHS_PREVIEW + 1
     ? shortPaths.join(', ')
-    : `${shortPaths.slice(0, 2).join(', ')} + ${shortPaths.length - 2} more`
+    : `${shortPaths.slice(0, MISSING_IGNORE_PATHS_PREVIEW).join(', ')} + ${shortPaths.length - MISSING_IGNORE_PATHS_PREVIEW} more`
 
   const tokensSaved = missing.length * ESTIMATED_READS_PER_MISSING_IGNORE * AVG_TOKENS_PER_READ
 
@@ -557,7 +563,7 @@ export function detectMissingClaudeignore(projectCwds: Set<string>): WasteFindin
       type: 'file-content',
       label: 'Create .claudeignore in each project root:',
       path: '.claudeignore',
-      content: JUNK_DIRS.slice(0, 8).join('\n'),
+      content: JUNK_DIRS.slice(0, JUNK_DIRS_IGNORE_PREVIEW).join('\n'),
     },
   }
 }
@@ -607,7 +613,7 @@ export function detectBloatedClaudeMd(projectCwds: Set<string>): WasteFinding | 
   const totalExtraLines = sorted.reduce((s, b) => s + (b.expandedLines - CLAUDEMD_HEALTHY_LINES), 0)
   const tokensSaved = totalExtraLines * CLAUDEMD_TOKENS_PER_LINE
 
-  const list = sorted.slice(0, 3).map(b => {
+  const list = sorted.slice(0, TOP_ITEMS_PREVIEW).map(b => {
     const importNote = b.imports > 0 ? ` with ${b.imports} @-import${b.imports > 1 ? 's' : ''}` : ''
     return `${b.path} (${b.expandedLines} lines${importNote})`
   }).join(', ')
@@ -778,7 +784,7 @@ export async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding
   if (ghosts.length === 0) return null
 
   const tokensSaved = ghosts.length * TOKENS_PER_AGENT_DEF
-  const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
+  const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
 
   return {
     title: `${ghosts.length} custom agent${ghosts.length > 1 ? 's' : ''} you never use`,
@@ -788,7 +794,7 @@ export async function detectGhostAgents(calls: ToolCall[]): Promise<WasteFinding
     fix: {
       type: 'command',
       label: `Archive unused agent${ghosts.length > 1 ? 's' : ''}:`,
-      text: ghosts.slice(0, 10).map(name => `mv ~/.claude/agents/${name}.md ~/.claude/agents/.archived/`).join('\n'),
+      text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/agents/${name}.md ~/.claude/agents/.archived/`).join('\n'),
     },
   }
 }
@@ -808,7 +814,7 @@ export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding
   if (ghosts.length === 0) return null
 
   const tokensSaved = ghosts.length * TOKENS_PER_SKILL_DEF
-  const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
+  const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
 
   return {
     title: `${ghosts.length} skill${ghosts.length > 1 ? 's' : ''} you never use`,
@@ -818,7 +824,7 @@ export async function detectGhostSkills(calls: ToolCall[]): Promise<WasteFinding
     fix: {
       type: 'command',
       label: `Archive unused skill${ghosts.length > 1 ? 's' : ''}:`,
-      text: ghosts.slice(0, 10).map(name => `mv ~/.claude/skills/${name} ~/.claude/skills/.archived/`).join('\n'),
+      text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/skills/${name} ~/.claude/skills/.archived/`).join('\n'),
     },
   }
 }
@@ -840,7 +846,7 @@ export async function detectGhostCommands(userMessages: string[]): Promise<Waste
   if (ghosts.length === 0) return null
 
   const tokensSaved = ghosts.length * TOKENS_PER_COMMAND_DEF
-  const list = ghosts.slice(0, 5).join(', ') + (ghosts.length > 5 ? `, +${ghosts.length - 5} more` : '')
+  const list = ghosts.slice(0, GHOST_NAMES_PREVIEW).join(', ') + (ghosts.length > GHOST_NAMES_PREVIEW ? `, +${ghosts.length - GHOST_NAMES_PREVIEW} more` : '')
 
   return {
     title: `${ghosts.length} slash command${ghosts.length > 1 ? 's' : ''} you never use`,
@@ -850,7 +856,7 @@ export async function detectGhostCommands(userMessages: string[]): Promise<Waste
     fix: {
       type: 'command',
       label: `Archive unused command${ghosts.length > 1 ? 's' : ''}:`,
-      text: ghosts.slice(0, 10).map(name => `mv ~/.claude/commands/${name}.md ~/.claude/commands/.archived/`).join('\n'),
+      text: ghosts.slice(0, GHOST_CLEANUP_COMMANDS_LIMIT).map(name => `mv ~/.claude/commands/${name}.md ~/.claude/commands/.archived/`).join('\n'),
     },
   }
 }
@@ -1108,7 +1114,7 @@ function renderOptimize(
 ): string {
   const lines: string[] = []
   lines.push('')
-  lines.push(`  ${chalk.bold.hex(ORANGE)('CodeBurn -- config health')}${chalk.dim('  ' + periodLabel)}`)
+  lines.push(`  ${chalk.bold.hex(ORANGE)('CodeBurn config health')}${chalk.dim('  ' + periodLabel)}`)
   lines.push(chalk.hex(DIM)('  ' + SEP.repeat(PANEL_WIDTH)))
 
   const issueSuffix = findings.length > 0 ? `, ${findings.length} issue${findings.length > 1 ? 's' : ''}` : ''
