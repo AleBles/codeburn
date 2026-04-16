@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.1 - 2026-04-16
+
+### Added
+- **JSON output on `report`, `today`, `month`.** `--format json` writes the
+  full dashboard (overview, daily, projects, models, activities, tools, MCP
+  servers, shell commands, top sessions) to stdout. Contributed by @mallek.
+- **Project filters.** `--project <name>` and `--exclude <name>` on all
+  commands (`report`, `today`, `month`, `status`, `export`). Case-insensitive
+  substring match against project name and path. Both flags are repeatable.
+  Contributed by @mallek.
+- **claude-opus-4-7 model mapping and pricing.** Displays as `Opus 4.7` with
+  the same Opus pricing as 4.6 and a 6x fast multiplier. Contributed by @mallek.
+- **Unit tests for `filterProjectsByName`** covering include/exclude
+  semantics, case-insensitivity, path matching, and input immutability.
+
+### Fixed
+- **Top Sessions panel truncating the calls column.** Row width filled the
+  full panel width without leaving room for the border and padding, so Ink
+  truncated the last 4 characters -- landing exactly on the calls column and
+  producing rows like `$182.58 ...` with no value.
+- **SwiftBar custom plugin directory** now honoured when installing the
+  menubar widget. Reads the configured path from SwiftBar's defaults before
+  falling back to the standard location. Contributed by @Galeas.
+- **`status --format menubar` per-provider today totals** now respect
+  `--project`/`--exclude`. The main period blocks already did, the provider
+  breakdown loop was the one spot that bypassed the filter.
+
 ## 0.6.0 - 2026-04-16
 
 ### Added
