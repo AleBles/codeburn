@@ -11,15 +11,16 @@ import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult
 import { estimateContextBudget, discoverProjectCwd, type ContextBudget } from './context-budget.js'
 import { join } from 'path'
 
-type Period = 'today' | 'week' | '30days' | 'month'
+type Period = 'today' | 'week' | '30days' | 'month' | 'all'
 type View = 'dashboard' | 'optimize'
 
-const PERIODS: Period[] = ['today', 'week', '30days', 'month']
+const PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all']
 const PERIOD_LABELS: Record<Period, string> = {
   today: 'Today',
   week: '7 Days',
   '30days': '30 Days',
   month: 'This Month',
+  all: 'All Time',
 }
 
 const MIN_WIDE = 90
@@ -41,6 +42,7 @@ const PANEL_COLORS = {
   overview: '#FF8C42',
   daily: '#5B9EF5',
   project: '#5BF5A0',
+  sessions: '#FF6B6B',
   model: '#E05BF5',
   activity: '#F5C85B',
   tools: '#5BF5E0',
@@ -104,6 +106,7 @@ function getDateRange(period: Period): { start: Date; end: Date } {
     case 'week': return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7), end }
     case '30days': return { start: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30), end }
     case 'month': return { start: new Date(now.getFullYear(), now.getMonth(), 1), end }
+    case 'all': return { start: new Date(0), end }
   }
 }
 
@@ -196,7 +199,7 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
       }
     }
   }
-  const sortedDays = Object.keys(dailyCosts).sort().slice(-days)
+  const sortedDays = days !== undefined ? Object.keys(dailyCosts).sort().slice(-days) : Object.keys(dailyCosts).sort()
   const maxCost = Math.max(...sortedDays.map(d => dailyCosts[d] ?? 0))
 
   return (
@@ -228,24 +231,30 @@ function shortProject(encoded: string): string {
   return parts.slice(-3).join('/')
 }
 
+const PROJECT_COL_AVG = 7
+const PROJECT_COL_BASE_WIDTH = 30
+const PROJECT_COL_WITH_OVERHEAD_WIDTH = 40
+
 function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget> }) {
   const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
   const hasBudgets = budgets && budgets.size > 0
-  const PROJECT_COL_BASE_WIDTH = 23
-  const PROJECT_COL_WITH_OVERHEAD_WIDTH = 33
   const nw = Math.max(8, pw - bw - (hasBudgets ? PROJECT_COL_WITH_OVERHEAD_WIDTH : PROJECT_COL_BASE_WIDTH))
   return (
     <Panel title="By Project" color={PANEL_COLORS.project} width={pw}>
       <Text dimColor wrap="truncate-end">
-        {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'sess'.padStart(6)}{hasBudgets ? 'overhead'.padStart(10) : ''}
+        {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}{hasBudgets ? 'overhead'.padStart(10) : ''}
       </Text>
       {projects.slice(0, 8).map((project, i) => {
         const budget = budgets?.get(project.project)
+        const avgCost = project.sessions.length > 0
+          ? formatCost(project.totalCostUSD / project.sessions.length)
+          : '-'
         return (
           <Text key={`${project.project}-${i}`} wrap="truncate-end">
             <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
             <Text dimColor> {fit(shortProject(project.project), nw)}</Text>
             <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
+            <Text color={GOLD}>{avgCost.padStart(PROJECT_COL_AVG)}</Text>
             <Text>{String(project.sessions.length).padStart(6)}</Text>
             {hasBudgets && <Text color="#7B9EF5">{(budget ? formatTokens(budget.total) : '-').padStart(10)}</Text>}
           </Text>
@@ -356,6 +365,44 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
             <HBar value={calls} max={maxCalls} width={bw} />
             <Text> {fit(display, nw)}</Text>
             <Text>{String(calls).padStart(7)}</Text>
+          </Text>
+        )
+      })}
+    </Panel>
+  )
+}
+
+const TOP_SESSIONS_DATE_LEN = 10
+const TOP_SESSIONS_COST_COL = 8
+const TOP_SESSIONS_CALLS_COL = 6
+
+function TopSessions({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
+  const allSessions = projects.flatMap(p =>
+    p.sessions.map(s => ({ ...s, projectName: p.project }))
+  )
+  const top = [...allSessions].sort((a, b) => b.totalCostUSD - a.totalCostUSD).slice(0, 5)
+
+  if (top.length === 0) {
+    return <Panel title="Top Sessions" color={PANEL_COLORS.sessions} width={pw}><Text dimColor>No sessions</Text></Panel>
+  }
+
+  const maxCost = top[0].totalCostUSD
+  const nw = Math.max(8, pw - bw - TOP_SESSIONS_COST_COL - TOP_SESSIONS_CALLS_COL - 1)
+
+  return (
+    <Panel title="Top Sessions" color={PANEL_COLORS.sessions} width={pw}>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'cost'.padStart(TOP_SESSIONS_COST_COL)}{'calls'.padStart(TOP_SESSIONS_CALLS_COL)}</Text>
+      {top.map((session, i) => {
+        const date = session.firstTimestamp
+          ? session.firstTimestamp.slice(0, TOP_SESSIONS_DATE_LEN)
+          : '----------'
+        const label = `${date} ${shortProject(session.projectName)}`
+        return (
+          <Text key={`${session.sessionId}-${i}`} wrap="truncate-end">
+            <HBar value={session.totalCostUSD} max={maxCost} width={bw} />
+            <Text dimColor> {fit(label, nw - 1)}</Text>
+            <Text color={GOLD}>{formatCost(session.totalCostUSD).padStart(TOP_SESSIONS_COST_COL)}</Text>
+            <Text>{String(session.apiCalls).padStart(TOP_SESSIONS_CALLS_COL)}</Text>
           </Text>
         )
       })}
@@ -488,7 +535,8 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable 
         <Text color={ORANGE} bold>1</Text><Text dimColor> today   </Text>
         <Text color={ORANGE} bold>2</Text><Text dimColor> week   </Text>
         <Text color={ORANGE} bold>3</Text><Text dimColor> 30 days   </Text>
-        <Text color={ORANGE} bold>4</Text><Text dimColor> month</Text>
+        <Text color={ORANGE} bold>4</Text><Text dimColor> month   </Text>
+        <Text color={ORANGE} bold>5</Text><Text dimColor> all time</Text>
         {!isOptimize && optimizeAvailable && findingCount != null && findingCount > 0 && (
           <><Text dimColor>   </Text><Text color={ORANGE} bold>o</Text><Text dimColor> optimize</Text><Text color="#F55B5B"> ({findingCount})</Text></>
         )}
@@ -508,11 +556,12 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets }
   const isCursor = activeProvider === 'cursor'
   if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
-  const days = period === 'month' || period === '30days' ? 31 : 14
+  const days = period === 'all' ? undefined : (period === 'month' || period === '30days' ? 31 : 14)
   return (
     <Box flexDirection="column" width={dashWidth}>
       <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
       <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} /></Row>
+      <TopSessions projects={projects} pw={dashWidth} bw={barWidth} />
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
       {isCursor ? (
         <ToolBreakdown projects={projects} pw={dashWidth} bw={barWidth} title="Languages" filterPrefix="lang:" />
@@ -624,6 +673,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     else if (input === '2') switchPeriodImmediate('week')
     else if (input === '3') switchPeriodImmediate('30days')
     else if (input === '4') switchPeriodImmediate('month')
+    else if (input === '5') switchPeriodImmediate('all')
   })
 
   if (loading) {
