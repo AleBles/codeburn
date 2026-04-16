@@ -73,9 +73,14 @@ async function fetchAndCachePricing(): Promise<Map<string, ModelCosts>> {
   const pricing = new Map<string, ModelCosts>()
 
   for (const [name, entry] of Object.entries(data)) {
-    if (name.includes('/') || name.includes('.')) continue
     const costs = parseLiteLLMEntry(entry)
-    if (costs) pricing.set(name, costs)
+    if (!costs) continue
+    pricing.set(name, costs)
+    // Also index by stripped name so lookups work without provider prefix:
+    // 'anthropic/claude-opus-4-6' is also queryable as 'claude-opus-4-6'.
+    // First write wins so direct-provider entries take precedence over re-hosters.
+    const stripped = name.replace(/^[^/]+\//, '')
+    if (stripped !== name && !pricing.has(stripped)) pricing.set(stripped, costs)
   }
 
   await mkdir(getCacheDir(), { recursive: true })
