@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.0 - 2026-04-16
+
+### Added
+- **GitHub Copilot provider.** Parses `~/.copilot/session-state/*/events.jsonl`
+  and tracks model changes via `session.model_change` events. Picks up six new
+  model prices (`gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-5-mini`, `o3`,
+  `o4-mini`). Contributed by @theodorosD. Note: Copilot logs only output
+  tokens, so cost rows will sit below actual API cost.
+- **All Time period (key `5`).** Shows every recorded session since CodeBurn
+  started tracking. Daily Activity expands to every available day instead of
+  the fixed 14- or 31-day window. `codeburn report -p all` also works from
+  the CLI. Contributed by @lfl1337.
+- **avg/s column in By Project.** Average cost per session next to the
+  existing total cost and session count. Surfaces projects where individual
+  sessions are expensive even if the total is modest. Contributed by @lfl1337.
+- **Top Sessions panel.** Highlights the five most expensive sessions across
+  all projects with date, project, cost, and API call count. Helps spot
+  outliers that drag weekly or monthly totals. Contributed by @lfl1337.
+
+### Fixed
+- `modelDisplayName` now matches longest key first so `gpt-4.1-mini` resolves
+  to `GPT-4.1 Mini` instead of `GPT-4.1`.
+- `TopSessions` handles missing `firstTimestamp` gracefully with a
+  `----------` placeholder instead of rendering a stray whitespace row.
+
 ## 0.5.0 - 2026-04-15
 
 ### Added
