@@ -352,7 +352,11 @@ program
         }
 
         const gapStart = c.lastComputedDate
-          ? new Date(new Date(`${c.lastComputedDate}T00:00:00.000Z`).getTime() + MS_PER_DAY)
+          ? new Date(
+              parseInt(c.lastComputedDate.slice(0, 4)),
+              parseInt(c.lastComputedDate.slice(5, 7)) - 1,
+              parseInt(c.lastComputedDate.slice(8, 10)) + 1
+            )
           : new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY)
 
         if (gapStart.getTime() <= yesterdayEnd.getTime()) {
