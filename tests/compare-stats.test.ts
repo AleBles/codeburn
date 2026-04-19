@@ -2,13 +2,14 @@ import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { aggregateModelStats, computeComparison, scanSelfCorrections, type ModelStats } from '../src/compare-stats.js'
+import { aggregateModelStats, computeComparison, computeCategoryComparison, computeWorkingStyle, scanSelfCorrections, type ModelStats } from '../src/compare-stats.js'
 import type { ProjectSummary, SessionSummary, ClassifiedTurn } from '../src/types.js'
 
-function makeTurn(model: string, cost: number, opts: { hasEdits?: boolean; retries?: number; outputTokens?: number; inputTokens?: number; cacheRead?: number; cacheWrite?: number; timestamp?: string } = {}): ClassifiedTurn {
+function makeTurn(model: string, cost: number, opts: { hasEdits?: boolean; retries?: number; outputTokens?: number; inputTokens?: number; cacheRead?: number; cacheWrite?: number; timestamp?: string; category?: string; hasAgentSpawn?: boolean; hasPlanMode?: boolean; speed?: 'standard' | 'fast'; tools?: string[] } = {}): ClassifiedTurn {
+  const defaultTools = opts.tools ?? (opts.hasEdits ? ['Edit'] : ['Read'])
   return {
     timestamp: opts.timestamp ?? '2026-04-15T10:00:00Z',
-    category: 'coding',
+    category: (opts.category ?? 'coding') as ClassifiedTurn['category'],
     retries: opts.retries ?? 0,
     hasEdits: opts.hasEdits ?? false,
     userMessage: '',
@@ -25,11 +26,11 @@ function makeTurn(model: string, cost: number, opts: { hasEdits?: boolean; retri
         webSearchRequests: 0,
       },
       costUSD: cost,
-      tools: opts.hasEdits ? ['Edit'] : ['Read'],
+      tools: defaultTools,
       mcpTools: [],
-      hasAgentSpawn: false,
-      hasPlanMode: false,
-      speed: 'standard' as const,
+      hasAgentSpawn: opts.hasAgentSpawn ?? false,
+      hasPlanMode: opts.hasPlanMode ?? false,
+      speed: opts.speed ?? 'standard' as const,
       timestamp: opts.timestamp ?? '2026-04-15T10:00:00Z',
       bashCommands: [],
       deduplicationKey: `key-${Math.random()}`,
@@ -128,6 +129,17 @@ describe('aggregateModelStats', () => {
     expect(aggregateModelStats([])).toEqual([])
   })
 
+  it('tracks editCost for edit turns', () => {
+    const project = makeProject([
+      makeTurn('opus-4-6', 0.10, { hasEdits: true }),
+      makeTurn('opus-4-6', 0.20, { hasEdits: true }),
+      makeTurn('opus-4-6', 0.50, { hasEdits: false }),
+    ])
+    const stats = aggregateModelStats([project])
+    const m = stats.find(s => s.model === 'opus-4-6')!
+    expect(m.editCost).toBeCloseTo(0.30)
+  })
+
   it('sorts by cost descending', () => {
     const project = makeProject([
       makeTurn('cheap-model', 0.01),
@@ -153,6 +165,7 @@ function makeStats(overrides: Partial<ModelStats> = {}): ModelStats {
     oneShotTurns: 60,
     retries: 20,
     selfCorrections: 10,
+    editCost: 8,
     firstSeen: '2026-04-01T00:00:00Z',
     lastSeen: '2026-04-15T00:00:00Z',
     ...overrides,
@@ -197,6 +210,16 @@ describe('computeComparison', () => {
 
     const costRow = rows.find(r => r.label === 'Cost / call')!
     expect(costRow.winner).toBe('tie')
+  })
+
+  it('computes cost per edit correctly', () => {
+    const a = makeStats({ editTurns: 40, editCost: 4 })
+    const b = makeStats({ editTurns: 80, editCost: 4 })
+    const rows = computeComparison(a, b)
+    const editRow = rows.find(r => r.label === 'Cost / edit')!
+    expect(editRow.valueA).toBeCloseTo(0.10)
+    expect(editRow.valueB).toBeCloseTo(0.05)
+    expect(editRow.winner).toBe('b')
   })
 
   it('picks higher value as winner for cache hit rate', () => {
@@ -352,5 +375,194 @@ describe('scanSelfCorrections', () => {
     } finally {
       await rm(dir2, { recursive: true, force: true })
     }
+  })
+})
+
+describe('computeCategoryComparison', () => {
+  it('returns per-category one-shot rates for both models', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { hasEdits: true, retries: 0, category: 'coding' }),
+      makeTurn('model-a', 0.10, { hasEdits: true, retries: 1, category: 'coding' }),
+      makeTurn('model-b', 0.10, { hasEdits: true, retries: 0, category: 'coding' }),
+      makeTurn('model-b', 0.10, { hasEdits: true, retries: 0, category: 'coding' }),
+      makeTurn('model-a', 0.10, { hasEdits: true, retries: 0, category: 'debugging' }),
+      makeTurn('model-b', 0.10, { hasEdits: true, retries: 1, category: 'debugging' }),
+    ])
+    const result = computeCategoryComparison([project], 'model-a', 'model-b')
+
+    const coding = result.find(r => r.category === 'coding')!
+    expect(coding.editTurnsA).toBe(2)
+    expect(coding.oneShotRateA).toBeCloseTo(50)
+    expect(coding.editTurnsB).toBe(2)
+    expect(coding.oneShotRateB).toBeCloseTo(100)
+    expect(coding.winner).toBe('b')
+
+    const debugging = result.find(r => r.category === 'debugging')!
+    expect(debugging.oneShotRateA).toBeCloseTo(100)
+    expect(debugging.oneShotRateB).toBeCloseTo(0)
+    expect(debugging.winner).toBe('a')
+  })
+
+  it('skips categories with no edit turns', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { hasEdits: false, category: 'conversation' }),
+      makeTurn('model-b', 0.10, { hasEdits: false, category: 'conversation' }),
+      makeTurn('model-a', 0.10, { hasEdits: true, category: 'coding' }),
+    ])
+    const result = computeCategoryComparison([project], 'model-a', 'model-b')
+    expect(result.find(r => r.category === 'conversation')).toBeUndefined()
+    expect(result).toHaveLength(1)
+  })
+
+  it('sorts by total turns descending', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { hasEdits: true, category: 'coding' }),
+      makeTurn('model-a', 0.10, { hasEdits: true, category: 'coding' }),
+      makeTurn('model-a', 0.10, { hasEdits: true, category: 'coding' }),
+      makeTurn('model-b', 0.10, { hasEdits: true, category: 'coding' }),
+      makeTurn('model-a', 0.10, { hasEdits: true, category: 'debugging' }),
+    ])
+    const result = computeCategoryComparison([project], 'model-a', 'model-b')
+    expect(result[0].category).toBe('coding')
+  })
+
+  it('returns null one-shot rate when model has no edits in category', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { hasEdits: true, category: 'coding' }),
+      makeTurn('model-b', 0.10, { hasEdits: false, category: 'coding' }),
+    ])
+    const result = computeCategoryComparison([project], 'model-a', 'model-b')
+    const coding = result.find(r => r.category === 'coding')!
+    expect(coding.oneShotRateA).toBeCloseTo(100)
+    expect(coding.oneShotRateB).toBeNull()
+    expect(coding.winner).toBe('none')
+  })
+})
+
+describe('computeWorkingStyle', () => {
+  it('computes delegation and planning rates', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { hasAgentSpawn: true }),
+      makeTurn('model-a', 0.10, {}),
+      makeTurn('model-a', 0.10, { hasPlanMode: true }),
+      makeTurn('model-b', 0.10, {}),
+      makeTurn('model-b', 0.10, {}),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+
+    const delegation = result.find(r => r.label === 'Delegation rate')!
+    expect(delegation.valueA).toBeCloseTo(100 / 3)
+    expect(delegation.valueB).toBeCloseTo(0)
+
+    const planning = result.find(r => r.label === 'Planning rate')!
+    expect(planning.valueA).toBeCloseTo(100 / 3)
+    expect(planning.valueB).toBeCloseTo(0)
+  })
+
+  it('computes avg tools per turn', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { hasEdits: true }),
+      makeTurn('model-a', 0.10, {}),
+      makeTurn('model-b', 0.10, { hasEdits: true }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const tools = result.find(r => r.label === 'Avg tools / turn')!
+    expect(tools.valueA).toBeCloseTo(1)
+    expect(tools.valueB).toBeCloseTo(1)
+  })
+
+  it('computes fast mode usage', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { speed: 'fast' }),
+      makeTurn('model-a', 0.10, {}),
+      makeTurn('model-b', 0.10, { speed: 'fast' }),
+      makeTurn('model-b', 0.10, { speed: 'fast' }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const fast = result.find(r => r.label === 'Fast mode usage')!
+    expect(fast.valueA).toBeCloseTo(50)
+    expect(fast.valueB).toBeCloseTo(100)
+  })
+
+  it('returns null for models with no turns', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, {}),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const delegation = result.find(r => r.label === 'Delegation rate')!
+    expect(delegation.valueA).toBeCloseTo(0)
+    expect(delegation.valueB).toBeNull()
+  })
+
+  it('counts TaskCreate as planning', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { tools: ['TaskCreate'] }),
+      makeTurn('model-a', 0.10, { tools: ['Read'] }),
+      makeTurn('model-a', 0.10, { tools: ['Edit'] }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const planning = result.find(r => r.label === 'Planning rate')!
+    expect(planning.valueA).toBeCloseTo(100 / 3)
+  })
+
+  it('counts TaskUpdate as planning', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { tools: ['TaskUpdate'] }),
+      makeTurn('model-a', 0.10, { tools: ['Read'] }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const planning = result.find(r => r.label === 'Planning rate')!
+    expect(planning.valueA).toBeCloseTo(50)
+  })
+
+  it('counts TodoWrite as planning', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { tools: ['TodoWrite', 'Read'] }),
+      makeTurn('model-a', 0.10, { tools: ['Bash'] }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const planning = result.find(r => r.label === 'Planning rate')!
+    expect(planning.valueA).toBeCloseTo(50)
+  })
+
+  it('counts turn with planning tool + edits as planning', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { tools: ['TaskCreate', 'Edit', 'Read'] }),
+      makeTurn('model-a', 0.10, { tools: ['Edit'] }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const planning = result.find(r => r.label === 'Planning rate')!
+    expect(planning.valueA).toBeCloseTo(50)
+  })
+
+  it('does not count regular tools as planning', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { tools: ['Read', 'Grep', 'Glob'] }),
+      makeTurn('model-a', 0.10, { tools: ['Edit', 'Bash'] }),
+      makeTurn('model-a', 0.10, { tools: ['Agent'] }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const planning = result.find(r => r.label === 'Planning rate')!
+    expect(planning.valueA).toBeCloseTo(0)
+  })
+
+  it('counts planning once per turn even with multiple planning tools', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { tools: ['TaskCreate', 'TaskUpdate', 'TaskCreate'] }),
+      makeTurn('model-a', 0.10, { tools: ['Read'] }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const planning = result.find(r => r.label === 'Planning rate')!
+    expect(planning.valueA).toBeCloseTo(50)
+  })
+
+  it('hasPlanMode still triggers planning rate', () => {
+    const project = makeProject([
+      makeTurn('model-a', 0.10, { hasPlanMode: true, tools: ['Read'] }),
+      makeTurn('model-a', 0.10, { tools: ['Read'] }),
+    ])
+    const result = computeWorkingStyle([project], 'model-a', 'model-b')
+    const planning = result.find(r => r.label === 'Planning rate')!
+    expect(planning.valueA).toBeCloseTo(50)
   })
 })

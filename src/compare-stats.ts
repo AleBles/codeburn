@@ -3,6 +3,8 @@ import { join } from 'path'
 
 import type { ProjectSummary } from './types.js'
 
+const PLANNING_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TodoWrite', 'EnterPlanMode', 'ExitPlanMode'])
+
 export type ModelStats = {
   model: string
   calls: number
@@ -16,6 +18,7 @@ export type ModelStats = {
   oneShotTurns: number
   retries: number
   selfCorrections: number
+  editCost: number
   firstSeen: string
   lastSeen: string
 }
@@ -26,7 +29,7 @@ export function aggregateModelStats(projects: ProjectSummary[]): ModelStats[] {
   const ensure = (model: string): ModelStats => {
     let s = byModel.get(model)
     if (!s) {
-      s = { model, calls: 0, cost: 0, outputTokens: 0, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTurns: 0, editTurns: 0, oneShotTurns: 0, retries: 0, selfCorrections: 0, firstSeen: '', lastSeen: '' }
+      s = { model, calls: 0, cost: 0, outputTokens: 0, inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTurns: 0, editTurns: 0, oneShotTurns: 0, retries: 0, selfCorrections: 0, editCost: 0, firstSeen: '', lastSeen: '' }
       byModel.set(model, s)
     }
     return s
@@ -41,8 +44,13 @@ export function aggregateModelStats(projects: ProjectSummary[]): ModelStats[] {
 
         const ms = ensure(primaryModel)
         ms.totalTurns++
-        if (turn.hasEdits) ms.editTurns++
-        if (turn.hasEdits && turn.retries === 0) ms.oneShotTurns++
+        if (turn.hasEdits) {
+          ms.editTurns++
+          if (turn.retries === 0) ms.oneShotTurns++
+          for (const c of turn.assistantCalls) {
+            if (c.model !== '<synthetic>') ms.editCost += c.costUSD
+          }
+        }
         ms.retries += turn.retries
 
         for (const call of turn.assistantCalls) {
@@ -66,6 +74,7 @@ export function aggregateModelStats(projects: ProjectSummary[]): ModelStats[] {
 }
 
 export type ComparisonRow = {
+  section: string
   label: string
   valueA: number | null
   valueB: number | null
@@ -73,7 +82,26 @@ export type ComparisonRow = {
   winner: 'a' | 'b' | 'tie' | 'none'
 }
 
+export type CategoryComparison = {
+  category: string
+  turnsA: number
+  editTurnsA: number
+  oneShotRateA: number | null
+  turnsB: number
+  editTurnsB: number
+  oneShotRateB: number | null
+  winner: 'a' | 'b' | 'tie' | 'none'
+}
+
+export type WorkingStyleRow = {
+  label: string
+  valueA: number | null
+  valueB: number | null
+  formatFn: ComparisonRow['formatFn']
+}
+
 type MetricDef = {
+  section: string
   label: string
   formatFn: ComparisonRow['formatFn']
   higherIsBetter: boolean
@@ -82,18 +110,49 @@ type MetricDef = {
 
 const METRICS: MetricDef[] = [
   {
+    section: 'Performance',
+    label: 'One-shot rate',
+    formatFn: 'percent',
+    higherIsBetter: true,
+    compute: s => s.editTurns > 0 ? (s.oneShotTurns / s.editTurns) * 100 : null,
+  },
+  {
+    section: 'Performance',
+    label: 'Retry rate',
+    formatFn: 'decimal',
+    higherIsBetter: false,
+    compute: s => s.editTurns > 0 ? s.retries / s.editTurns : null,
+  },
+  {
+    section: 'Performance',
+    label: 'Self-correction',
+    formatFn: 'percent',
+    higherIsBetter: false,
+    compute: s => s.totalTurns > 0 ? (s.selfCorrections / s.totalTurns) * 100 : null,
+  },
+  {
+    section: 'Efficiency',
     label: 'Cost / call',
     formatFn: 'cost',
     higherIsBetter: false,
     compute: s => s.calls > 0 ? s.cost / s.calls : null,
   },
   {
+    section: 'Efficiency',
+    label: 'Cost / edit',
+    formatFn: 'cost',
+    higherIsBetter: false,
+    compute: s => s.editTurns > 0 ? s.editCost / s.editTurns : null,
+  },
+  {
+    section: 'Efficiency',
     label: 'Output tok / call',
     formatFn: 'number',
     higherIsBetter: false,
     compute: s => s.calls > 0 ? Math.round(s.outputTokens / s.calls) : null,
   },
   {
+    section: 'Efficiency',
     label: 'Cache hit rate',
     formatFn: 'percent',
     higherIsBetter: true,
@@ -101,24 +160,6 @@ const METRICS: MetricDef[] = [
       const total = s.inputTokens + s.cacheReadTokens + s.cacheWriteTokens
       return total > 0 ? (s.cacheReadTokens / total) * 100 : null
     },
-  },
-  {
-    label: 'One-shot rate',
-    formatFn: 'percent',
-    higherIsBetter: true,
-    compute: s => s.editTurns > 0 ? (s.oneShotTurns / s.editTurns) * 100 : null,
-  },
-  {
-    label: 'Retry rate',
-    formatFn: 'decimal',
-    higherIsBetter: false,
-    compute: s => s.editTurns > 0 ? s.retries / s.editTurns : null,
-  },
-  {
-    label: 'Self-correction',
-    formatFn: 'percent',
-    higherIsBetter: false,
-    compute: s => s.totalTurns > 0 ? (s.selfCorrections / s.totalTurns) * 100 : null,
   },
 ]
 
@@ -134,6 +175,7 @@ export function computeComparison(a: ModelStats, b: ModelStats): ComparisonRow[]
     const valueA = m.compute(a)
     const valueB = m.compute(b)
     return {
+      section: m.section,
       label: m.label,
       valueA,
       valueB,
@@ -141,6 +183,98 @@ export function computeComparison(a: ModelStats, b: ModelStats): ComparisonRow[]
       winner: pickWinner(valueA, valueB, m.higherIsBetter),
     }
   })
+}
+
+export function computeCategoryComparison(projects: ProjectSummary[], modelA: string, modelB: string): CategoryComparison[] {
+  type Accum = { turns: number; editTurns: number; oneShotTurns: number }
+  const mapA = new Map<string, Accum>()
+  const mapB = new Map<string, Accum>()
+
+  const ensure = (map: Map<string, Accum>, cat: string): Accum => {
+    let a = map.get(cat)
+    if (!a) { a = { turns: 0, editTurns: 0, oneShotTurns: 0 }; map.set(cat, a) }
+    return a
+  }
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const turn of session.turns) {
+        if (turn.assistantCalls.length === 0) continue
+        const primary = turn.assistantCalls[0]!.model
+        if (primary !== modelA && primary !== modelB) continue
+
+        const acc = ensure(primary === modelA ? mapA : mapB, turn.category)
+        acc.turns++
+        if (turn.hasEdits) {
+          acc.editTurns++
+          if (turn.retries === 0) acc.oneShotTurns++
+        }
+      }
+    }
+  }
+
+  const allCats = new Set([...mapA.keys(), ...mapB.keys()])
+  const result: CategoryComparison[] = []
+
+  for (const category of allCats) {
+    const a = mapA.get(category)
+    const b = mapB.get(category)
+    if ((!a || a.editTurns === 0) && (!b || b.editTurns === 0)) continue
+
+    const rateA = a && a.editTurns > 0 ? (a.oneShotTurns / a.editTurns) * 100 : null
+    const rateB = b && b.editTurns > 0 ? (b.oneShotTurns / b.editTurns) * 100 : null
+
+    result.push({
+      category,
+      turnsA: a?.turns ?? 0,
+      editTurnsA: a?.editTurns ?? 0,
+      oneShotRateA: rateA,
+      turnsB: b?.turns ?? 0,
+      editTurnsB: b?.editTurns ?? 0,
+      oneShotRateB: rateB,
+      winner: pickWinner(rateA, rateB, true),
+    })
+  }
+
+  return result.sort((a, b) => (b.turnsA + b.turnsB) - (a.turnsA + a.turnsB))
+}
+
+export function computeWorkingStyle(projects: ProjectSummary[], modelA: string, modelB: string): WorkingStyleRow[] {
+  type StyleAccum = { totalTurns: number; agentSpawns: number; planModeUses: number; totalToolCalls: number; fastModeCalls: number }
+  const sA: StyleAccum = { totalTurns: 0, agentSpawns: 0, planModeUses: 0, totalToolCalls: 0, fastModeCalls: 0 }
+  const sB: StyleAccum = { totalTurns: 0, agentSpawns: 0, planModeUses: 0, totalToolCalls: 0, fastModeCalls: 0 }
+
+  for (const project of projects) {
+    for (const session of project.sessions) {
+      for (const turn of session.turns) {
+        if (turn.assistantCalls.length === 0) continue
+        const primary = turn.assistantCalls[0]!.model
+        if (primary !== modelA && primary !== modelB) continue
+
+        const s = primary === modelA ? sA : sB
+        s.totalTurns++
+        const turnTools = turn.assistantCalls.flatMap(c => c.tools)
+        if (turnTools.some(t => PLANNING_TOOLS.has(t)) || turn.assistantCalls.some(c => c.hasPlanMode)) {
+          s.planModeUses++
+        }
+        for (const call of turn.assistantCalls) {
+          s.totalToolCalls += call.tools.length
+          if (call.hasAgentSpawn) s.agentSpawns++
+          if (call.speed === 'fast') s.fastModeCalls++
+        }
+      }
+    }
+  }
+
+  const pct = (num: number, den: number) => den > 0 ? (num / den) * 100 : null
+  const avg = (num: number, den: number) => den > 0 ? num / den : null
+
+  return [
+    { label: 'Delegation rate', valueA: pct(sA.agentSpawns, sA.totalTurns), valueB: pct(sB.agentSpawns, sB.totalTurns), formatFn: 'percent' as const },
+    { label: 'Planning rate', valueA: pct(sA.planModeUses, sA.totalTurns), valueB: pct(sB.planModeUses, sB.totalTurns), formatFn: 'percent' as const },
+    { label: 'Avg tools / turn', valueA: avg(sA.totalToolCalls, sA.totalTurns), valueB: avg(sB.totalToolCalls, sB.totalTurns), formatFn: 'decimal' as const },
+    { label: 'Fast mode usage', valueA: pct(sA.fastModeCalls, sA.totalTurns), valueB: pct(sB.fastModeCalls, sB.totalTurns), formatFn: 'percent' as const },
+  ]
 }
 
 const SELF_CORRECTION_PATTERNS = [
