@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-private let cacheTTLSeconds: TimeInterval = 300
+private let cacheTTLSeconds: TimeInterval = 30
 
 struct CachedPayload {
     let payload: MenubarPayload
@@ -52,17 +52,15 @@ final class AppStore {
         payload.optimize.findingCount
     }
 
-    /// Switch to a period. Uses cached payload if fresh; otherwise fetches.
+    /// Switch to a period. Always fetches fresh data so the user never sees stale numbers.
     func switchTo(period: Period) async {
         selectedPeriod = period
-        if let cached = cache[currentKey], cached.isFresh { return }
         await refresh(includeOptimize: true)
     }
 
-    /// Switch to a provider filter. Uses cached payload if fresh; otherwise fetches.
+    /// Switch to a provider filter. Always fetches fresh data so the user never sees stale numbers.
     func switchTo(provider: ProviderFilter) async {
         selectedProvider = provider
-        if let cached = cache[currentKey], cached.isFresh { return }
         await refresh(includeOptimize: true)
     }
 
@@ -75,10 +73,11 @@ final class AppStore {
         let key = currentKey
         guard !inFlightKeys.contains(key) else { return }
         inFlightKeys.insert(key)
-        isLoading = true
+        let showLoading = cache[key] == nil
+        if showLoading { isLoading = true }
         defer {
             inFlightKeys.remove(key)
-            isLoading = false
+            if showLoading { isLoading = false }
         }
         do {
             let fresh = try await DataClient.fetch(period: key.period, provider: key.provider, includeOptimize: includeOptimize)
@@ -87,6 +86,15 @@ final class AppStore {
         } catch {
             lastError = String(describing: error)
             NSLog("CodeBurn: fetch failed for \(key.period.rawValue)/\(key.provider.rawValue): \(error)")
+        }
+    }
+
+    /// Prefetch all periods so tab switching is instant. Skips any period already cached.
+    func prefetchAll() async {
+        for period in Period.allCases {
+            let key = PayloadCacheKey(period: period, provider: .all)
+            if cache[key] != nil { continue }
+            await refreshQuietly(period: period)
         }
     }
 

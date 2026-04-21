@@ -3,9 +3,10 @@ import { dirname, join, resolve } from 'path'
 
 import { CATEGORY_LABELS, type ProjectSummary, type TaskCategory } from './types.js'
 import { getCurrency, convertCost } from './currency.js'
+import { dateKey } from './day-aggregator.js'
 
 function escCsv(s: string): string {
-  const sanitized = /^[=+\-@]/.test(s) ? `'${s}` : s
+  const sanitized = /^[\t\r=+\-@]/.test(s) ? `'${s}` : s
   if (sanitized.includes(',') || sanitized.includes('"') || sanitized.includes('\n')) {
     return `"${sanitized.replace(/"/g, '""')}"`
   }
@@ -48,7 +49,7 @@ function buildDailyRows(projects: ProjectSummary[], period: string): Row[] {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
         if (!turn.timestamp) continue
-        const day = turn.timestamp.slice(0, 10)
+        const day = dateKey(turn.timestamp)
         if (!daily[day]) {
           daily[day] = { cost: 0, calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, sessions: new Set() }
         }
@@ -282,7 +283,7 @@ async function clearCodeburnExportFolder(path: string): Promise<void> {
 /// wipe a sensitive file (prior versions did `rm(path, { force: true })` unconditionally).
 export async function exportCsv(periods: PeriodExport[], outputPath: string): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
-  const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1].projects
+  const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1]?.projects ?? []
 
   let folder = resolve(outputPath)
   if (folder.toLowerCase().endsWith('.csv')) {
@@ -324,7 +325,7 @@ export async function exportCsv(periods: PeriodExport[], outputPath: string): Pr
 
 export async function exportJson(periods: PeriodExport[], outputPath: string): Promise<string> {
   const thirtyDays = periods.find(p => p.label === '30 Days')
-  const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1].projects
+  const thirtyDayProjects = thirtyDays?.projects ?? periods[periods.length - 1]?.projects ?? []
   const { code, rate, symbol } = getCurrency()
 
   const data = {

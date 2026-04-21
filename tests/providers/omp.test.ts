@@ -164,7 +164,7 @@ describe('omp provider - JSONL parsing', () => {
     expect(call.sessionId).toBe('sess-omp-1')
     expect(call.userMessage).toBe('write a test')
     expect(call.timestamp).toBe('2026-04-14T10:00:30.000Z')
-    expect(call.deduplicationKey).toContain('pi:')
+    expect(call.deduplicationKey).toContain('omp:')
     expect(call.deduplicationKey).toContain('resp-omp-1')
   })
 

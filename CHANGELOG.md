@@ -1,13 +1,70 @@
 # Changelog
 
-## Unreleased
+## 0.8.4 - 2026-04-20
+
+### Fixed
+- **Menubar hang on large session histories.** Menubar-json now uses the source cache instead of re-parsing all files on every poll.
+
+## 0.8.3 - 2026-04-20
+
+### Fixed
+- **Source cache empty-session poisoning.** Cache entries with zero sessions are now treated as cache misses, forcing a fresh re-parse instead of silently dropping the session data.
+- **Date range skip on changed files.** The date range exclusion now runs only after the fingerprint matches, so files that have grown with new data are never incorrectly skipped.
+- **TUI auto-refresh not updating.** The 30-second refresh timer now bypasses the in-memory CachedWindow, which was permanently stale because the date range end is always end-of-day.
+- **Menubar showing stale or decreasing costs.** Fixed cache invalidation so the menubar receives correct, up-to-date cost data.
+- **Swift menubar observation race.** Explicit UI refresh calls after each data fetch prevent missed updates from the one-shot observation callback.
+
+## 0.8.2 - 2026-04-20
+
+### Added
+- **Persistent parse cache for all providers.** Repeated CLI runs now reuse parsed source summaries across fresh processes instead of reparsing raw logs every time. Cache lives at `~/.cache/codeburn/source-cache-v1/` with atomic writes and 0600 file permissions. Credit: @spMohanty (PR #116).
+- **`--no-cache` on parse-backed commands.** `report`, `today`, `month`, `status`, `export`, `optimize`, and `compare` can bypass cached entries for that run and rebuild them from raw logs. Credit: @spMohanty (PR #116).
+- **`Updating cache` stderr progress.** Non-JSON cold or partial cache rebuilds now show progress while CodeBurn refreshes changed sources. Credit: @spMohanty (PR #116).
+- **`codeburn plan` subscription tracking.** Set your plan (`claude-pro`, `claude-max`, `cursor-pro`, or custom) to see a usage progress bar in the dashboard. Includes 7-day trailing median projection and billing-cycle-aware period math. Credit: @tmchow (PR #74).
+
+### Changed
+- **Cursor now uses the shared parse cache.** The provider-specific Cursor cache path is gone; SQLite-backed provider data now flows through the same persistent cache layer as the other providers. Credit: @spMohanty (PR #116).
+
+### Fixed
+- **Model pricing: removed bidirectional fuzzy match.** `canonical.startsWith(key) || key.startsWith(canonical)` could match unrelated models. Now uses one-directional prefix only. Credit: @hobostay (PR #77).
+- **Zero-cost models incorrectly filtered.** `!entry.input_cost_per_token` treated `0` as missing. Now checks `=== undefined` so free-tier models retain their pricing entry. Credit: @hobostay (PR #77).
+- **File descriptor leak in `readSessionLines`.** Generator now calls `stream.destroy()` in a `finally` block so early abandonment does not leak open handles. Credit: @hobostay (PR #77).
+- **CSV injection guard extended.** Tab and carriage return characters at cell start are now escaped alongside `=`, `+`, `-`, `@`. Credit: @hobostay (PR #77).
+- **Crash on empty export periods.** Optional chaining prevents `undefined` access when a period has no projects. Credit: @hobostay (PR #77).
+- **Config read crash on malformed JSON.** Restored catch-all error handling in `readConfig` so a corrupt `config.json` returns defaults instead of crashing.
+
+## 0.8.0 - 2026-04-19
+
+### Added
+- **`codeburn compare` command.** Side-by-side model comparison across any two models in your session data. Interactive model picker, period switching, and provider filtering.
+- **Compare view in dashboard.** Press `c` in the TUI to enter compare mode. Arrow keys switch periods, `b` to return.
+- **Performance metrics.** One-shot rate, retry rate, and self-correction detection per model. Self-corrections are detected by scanning JSONL transcripts for tool error followed by retry patterns.
+- **Efficiency metrics.** Cost per call, cost per edit turn, output tokens per call, and cache hit rate.
+- **Per-category one-shot rates.** Breaks down one-shot success by task category (Coding, Debugging, Feature Dev, etc.) for each model.
+- **Working style comparison.** Delegation rate, planning rate (TaskCreate, TaskUpdate, TodoWrite), average tools per turn, and fast mode usage.
+- **TUI auto-refresh enabled by default.** Dashboard now refreshes every 30 seconds out of the box. Pass `--refresh 0` to disable. Closes #107.
+- **36 comparison tests.** Full coverage for metric computation, category breakdown, working style, self-correction scanning, and planning tool detection. Total suite: 274 tests.
+
+### Fixed
+- **Planning rate showed ~0% in model comparison.** Only counted `EnterPlanMode` (rarely used) instead of all planning tools (TaskCreate, TaskUpdate, TodoWrite, EnterPlanMode, ExitPlanMode). Now detects planning at the turn level across all five tool types.
+- **Menubar "All" tab showed stale data.** Three-layer caching (300s in-memory TTL, daily disk cache, 60s parser cache) prevented tab switches from showing fresh numbers. Cache TTL reduced from 300s to 30s, tab switches always fetch fresh data, background refresh interval reduced from 60s to 15s.
+
+## 0.7.4 - 2026-04-19
 
 ### Added
 - **`codeburn report --from/--to`.** Filter sessions to an exact `YYYY-MM-DD` date range (local time). Either flag alone is valid: `--from` alone runs from the given date through end-of-today, `--to` alone runs from the earliest data through the given date. Inverted ranges or malformed dates exit with a clear error. In the TUI, pressing `1`-`5` still switches to the predefined periods. Credit: @lfl1337 (PR #80).
 - **`avgCostPerSession` in reports.** JSON `projects[]` entries gain an `avgCostPerSession` field and `export -f csv` adds an `Avg/Session (USD)` column to `projects.csv`. Column order in `projects.csv` is now `Project, Cost, Avg/Session, Share, API Calls, Sessions` -- scripts parsing by column position should read by header instead. Credit: @lfl1337 (PR #80).
+- **Menubar auto-update checker.** Background check every 2 days against GitHub Releases. When a newer menubar build is available, an "Update" pill appears in the popover header. One click downloads, replaces, and relaunches the app automatically.
+- **Smart agent tab visibility.** The provider tab strip hides when fewer than two providers have spend, reducing clutter for single-tool users.
 
-### Security
-- **Semgrep CI guard against prototype pollution regressions.** New `.github/workflows/ci.yml` runs a bracket-assign guard on `src/providers/` and `src/parser.ts` on every push to main and every PR. Blocks re-introducing `$MAP[$KEY] = $MAP[$KEY] ?? $INIT` patterns on `{}`-initialized maps. `categoryBreakdown` in `parser.ts` switched to `Object.create(null)` for consistency with its sibling breakdown maps. Credit: @lfl1337 (PR #78).
+### Fixed
+- **Stale daily cache caused wrong menubar costs.** The daily cache never recomputed yesterday once written, so a mid-day CLI run would freeze partial cost data permanently. The "All" provider view relied on this cache, showing wildly incorrect numbers while per-provider tabs (which parse fresh) were correct. Yesterday is now evicted and recomputed on every run.
+- **UTC date bucketing instead of local timezone.** Timestamps in session files are UTC ISO strings. Several code paths extracted the date via `.slice(0, 10)` (UTC date) while date range filtering used local-time boundaries. Turns between UTC midnight and local midnight were attributed to the wrong day -- the menubar showed lower today cost than the TUI. All date bucketing now uses local time consistently.
+- **OpenCode SQLite ESM loader.** `node:sqlite` is now loaded correctly in ESM runtime. Credit: @aaronflorey (PR #104).
+- **Menubar trend tooltip per-provider views.** Tooltip now shows the correct cost when a specific provider tab is selected.
+- **Menubar (today, all) cache freshness.** The cache entry powering the menubar title and tab labels is now kept fresh independently of the selected period/provider.
+- **Agent tab strip restored.** All detected providers are shown again after a regression hid them.
+- **Plan pane button cleanup.** Removed the broken "Connect Claude" button that opened a useless terminal session. The Plan pane now shows only a "Retry" button.
 
 ## 0.7.3 - 2026-04-18
 

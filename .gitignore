@@ -16,6 +16,7 @@ Thumbs.db
 # Planning artifacts (internal, not shipped)
 docs/superpowers/
 .claude/
+CLAUDE.md
 
 # Config / secrets
 .env
@@ -36,3 +37,6 @@ npm-debug.log*
 
 # Local Discord brand / promo assets not yet ready to publish
 assets/discord-*.png
+
+# Desktop app experiments
+desktop/

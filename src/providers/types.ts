@@ -1,7 +1,13 @@
+export type SourceCacheStrategy = 'full-reparse' | 'append-jsonl'
+
 export type SessionSource = {
   path: string
   project: string
   provider: string
+  fingerprintPath?: string
+  cacheStrategy?: SourceCacheStrategy
+  progressLabel?: string
+  parserVersion?: string
 }
 
 export type SessionParser = {

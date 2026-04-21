@@ -344,7 +344,7 @@ private struct BarTooltipCard: View {
 private func prettyDate(_ ymd: String) -> String {
     let parser = DateFormatter()
     parser.dateFormat = "yyyy-MM-dd"
-    parser.timeZone = TimeZone(identifier: "UTC")
+    parser.timeZone = .current
     guard let date = parser.date(from: ymd) else { return ymd }
     let display = DateFormatter()
     display.dateFormat = "EEE MMM d"
@@ -392,11 +392,11 @@ private struct TrendStats {
 
 private func buildTrendBars(from days: [DailyHistoryEntry]) -> [TrendBar] {
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "UTC")!
+    calendar.timeZone = .current
     let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
     let entryByDate = Dictionary(uniqueKeysWithValues: days.map { ($0.date, $0) })
@@ -427,11 +427,11 @@ private func computeTrendStats(bars: [TrendBar], allDays: [DailyHistoryEntry]) -
     let peak = bars.filter { $0.cost > 0 }.max(by: { $0.cost < $1.cost })
 
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "UTC")!
+    calendar.timeZone = .current
     let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
     let today = calendar.startOfDay(for: Date())
@@ -547,11 +547,11 @@ private struct ForecastStats {
 
 private func computeForecast(days: [DailyHistoryEntry]) -> ForecastStats {
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "UTC")!
+    calendar.timeZone = .current
     let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
     let now = Date()
@@ -798,17 +798,17 @@ private func computeAllStats(payload: MenubarPayload) -> AllStats {
     let favoriteModel = payload.current.topModels.first?.name ?? "—"
 
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "UTC")!
+    calendar.timeZone = .current
     let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
     let displayFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "MMM d"
-        f.timeZone = TimeZone(identifier: "UTC")
+        f.timeZone = .current
         return f
     }()
 
@@ -1041,7 +1041,6 @@ private struct PlanLoadingView: View {
 
 private struct PlanNoCredentialsView: View {
     @Environment(AppStore.self) private var store
-    @State private var showManualFallback = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1051,32 +1050,17 @@ private struct PlanNoCredentialsView: View {
             Text("No Claude subscription connected")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
-            if showManualFallback {
-                Text("Terminal.app isn't available. Open your terminal and run `claude login`, then click Retry.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 280)
-            } else {
-                Text("Click Connect to sign in with Claude, then return here.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 260)
+            Text("Sign in with Claude Code, then click Retry.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 260)
+            Button("Retry") {
+                Task { await store.refreshSubscription() }
             }
-            HStack(spacing: 8) {
-                Button("Connect Claude") {
-                    if !TerminalLauncher.openClaudeLogin() { showManualFallback = true }
-                }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.brandAccent)
-                Button("Retry") {
-                    Task { await store.refreshSubscription() }
-                }
-                .controlSize(.small)
-                .buttonStyle(.bordered)
-            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.brandAccent)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
@@ -1086,7 +1070,6 @@ private struct PlanNoCredentialsView: View {
 private struct PlanFailedView: View {
     @Environment(AppStore.self) private var store
     let error: String?
-    @State private var showManualFallback = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1096,13 +1079,7 @@ private struct PlanFailedView: View {
             Text("Couldn't load plan data")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
-            if showManualFallback {
-                Text("Terminal.app isn't available. Open your terminal and run `claude login`, then click Retry.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 280)
-            } else if let error {
+            if let error {
                 Text(error)
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
@@ -1110,19 +1087,12 @@ private struct PlanFailedView: View {
                     .frame(maxWidth: 280)
                     .lineLimit(3)
             }
-            HStack(spacing: 8) {
-                Button("Reconnect Claude") {
-                    if !TerminalLauncher.openClaudeLogin() { showManualFallback = true }
-                }
-                .controlSize(.small)
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.brandAccent)
-                Button("Retry") {
-                    Task { await store.refreshSubscription() }
-                }
-                .controlSize(.small)
-                .buttonStyle(.bordered)
+            Button("Retry") {
+                Task { await store.refreshSubscription() }
             }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.brandAccent)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)

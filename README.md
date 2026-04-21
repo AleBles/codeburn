@@ -9,17 +9,15 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/v/codeburn.svg" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/dt/codeburn.svg" alt="total downloads" /></a>
-  <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/dm/codeburn.svg" alt="monthly downloads" /></a>
-  <a href="https://bundlephobia.com/package/codeburn"><img src="https://img.shields.io/bundlephobia/min/codeburn" alt="install size" /></a>
   <a href="https://github.com/getagentseal/codeburn/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/codeburn.svg" alt="license" /></a>
-  <a href="https://github.com/getagentseal/codeburn"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="node version" /></a>
+  <a href="https://github.com/getagentseal/codeburn"><img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="node version" /></a>
 </p>
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **OpenCode**, **Pi**, **[OMP](https://github.com/can1357/oh-my-pi)** (Oh My Pi), and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
+By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **cursor-agent**, **OpenCode**, **Pi**, **[OMP](https://github.com/can1357/oh-my-pi)** (Oh My Pi), and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
 
 Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
@@ -37,9 +35,9 @@ npx codeburn
 
 ### Requirements
 
-- Node.js 20+
+- Node.js 22+
 - Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, OpenCode, Pi (`~/.pi/agent/sessions/`), OMP (`~/.omp/agent/sessions/`), and/or GitHub Copilot (`~/.copilot/session-state/`)
-- For Cursor/OpenCode support: `better-sqlite3` is installed automatically as an optional dependency
+- For Cursor/OpenCode support: uses Node's built-in `node:sqlite` (Node 22+)
 
 ## Usage
 
@@ -51,7 +49,7 @@ codeburn report -p 30days       # rolling 30-day window
 codeburn report -p all          # every recorded session
 codeburn report --from 2026-04-01 --to 2026-04-10  # exact date range
 codeburn report --format json   # full dashboard data as JSON
-codeburn report --refresh 60    # auto-refresh every 60 seconds
+codeburn report --refresh 60    # auto-refresh every 60s (default: 30s)
 codeburn status                 # compact one-liner (today + month)
 codeburn status --format json
 codeburn export                 # CSV with today, 7 days, 30 days
@@ -60,7 +58,7 @@ codeburn optimize               # find waste, get copy-paste fixes
 codeburn optimize -p week       # scope the scan to last 7 days
 ```
 
-Arrow keys switch between Today / 7 Days / 30 Days / Month / All Time. Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts. The dashboard also shows average cost per session and the five most expensive sessions across all projects.
+Arrow keys switch between Today / 7 Days / 30 Days / Month / All Time. Press `q` to quit, `1` `2` `3` `4` `5` as shortcuts, `c` to open model comparison. The dashboard auto-refreshes every 30 seconds by default (`--refresh 0` to disable). The dashboard also shows average cost per session and the five most expensive sessions across all projects.
 
 ### JSON output
 
@@ -82,6 +80,25 @@ codeburn today --format json | jq '.overview.cost'
 
 For the lighter `status --format json` (today + month totals only) or file-based exports (`export -f json`), see above.
 
+## Cache behavior
+
+CodeBurn now keeps a persistent parse cache under `~/.cache/codeburn/source-cache-v1/`.
+It applies to every provider. Unchanged sources load from cache across fresh CLI runs,
+while changed sources are refreshed on demand so rolling windows like `today` stay current
+as new log entries land.
+
+Use `--no-cache` on any command that reads session data to ignore cached entries for that
+run and rebuild them from raw logs:
+
+```bash
+codeburn today --no-cache
+codeburn report --period all --no-cache
+codeburn export --no-cache
+```
+
+When a non-JSON command needs to rebuild part of the cache, CodeBurn shows an
+`Updating cache` progress bar on stderr. JSON output stays clean on stdout.
+
 ## Providers
 
 CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
@@ -91,6 +108,7 @@ codeburn report                      # all providers combined (default)
 codeburn report --provider claude    # Claude Code only
 codeburn report --provider codex     # Codex only
 codeburn report --provider cursor    # Cursor only
+codeburn report --provider cursor-agent  # cursor-agent CLI only
 codeburn report --provider opencode  # OpenCode only
 codeburn report --provider pi        # Pi only
 codeburn report --provider copilot   # GitHub Copilot only
@@ -144,7 +162,7 @@ Either flag alone is valid. Inverted or malformed dates exit with a clear error.
 
 Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
 
-Cursor reads token usage from its local SQLite database. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a **Languages** panel (extracted from code blocks) instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. First run on a large Cursor database may take up to a minute; results are cached and subsequent runs are instant.
+Cursor reads token usage from its local SQLite database via Node's built-in `node:sqlite`. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a **Languages** panel (extracted from code blocks) instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. Parsed results are cached through the shared persistent cache layer.
 
 GitHub Copilot only logs output tokens in its session state, so Copilot cost rows sit below actual API cost. The model is tracked via `session.model_change` events; messages before the first model change are skipped to avoid silent misattribution.
 
@@ -186,15 +204,31 @@ The currency setting applies everywhere: dashboard, status bar, menu bar widget,
 
 The menu bar widget includes a currency picker with 17 common currencies. For any currency not listed, use the CLI command above.
 
+## Plans (subscription tracking)
+
+If you're on Claude Pro, Claude Max, or Cursor Pro, set your plan so the dashboard shows subscription-relative usage:
+
+```bash
+codeburn plan set claude-max                                  # $200/month
+codeburn plan set claude-pro                                  # $20/month
+codeburn plan set cursor-pro                                  # $20/month
+codeburn plan set custom --monthly-usd 150 --provider claude # custom
+codeburn plan set none                                        # disable plan view
+codeburn plan                                                 # show current
+codeburn plan reset                                           # remove plan config
+```
+
+The progress bar shows API-equivalent cost vs subscription price. Presets use publicly stated plan prices (as of April 2026); they do not model exact token allowances, because vendors do not publish precise consumer-plan limits.
+
 ## Menu Bar
 
-<img src="https://cdn.jsdelivr.net/gh/getagentseal/codeburn@main/assets/menubar-0.7.2.png" alt="CodeBurn macOS menubar app" width="420" />
+<img src="https://cdn.jsdelivr.net/gh/getagentseal/codeburn@main/assets/menubar-0.8.0.png" alt="CodeBurn macOS menubar app" width="420" />
 
 ```bash
 npx codeburn menubar
 ```
 
-One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift + SwiftUI app lives in `mac/` (see `mac/README.md` for build details). Shows today's cost with a flame icon, opens a popover with agent tabs, period switcher (Today / 7 Days / 30 Days / Month / All), Trend / Forecast / Pulse / Stats / Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes live via FSEvents plus a 60-second poll.
+One command: downloads the latest `.app`, installs into `~/Applications`, and launches it. Re-run with `--force` to reinstall. Native Swift + SwiftUI app lives in `mac/` (see `mac/README.md` for build details). Shows today's cost with a flame icon, opens a popover with agent tabs, period switcher (Today / 7 Days / 30 Days / Month / All), Trend / Forecast / Pulse / Stats / Plan insights, activity and model breakdowns, optimize findings, and CSV/JSON export. Refreshes live via FSEvents plus a 15-second poll.
 
 ## What it tracks
 
@@ -268,6 +302,37 @@ Each finding shows the estimated token and dollar savings plus a ready-to-paste 
 
 You can also open it inline from the dashboard: press `o` when a finding count appears in the status bar, `b` to return.
 
+## Compare
+
+Side-by-side model comparison across any two models in your session data. Pick any pair and see how they stack up on real usage from your own sessions.
+
+```bash
+codeburn compare                        # interactive model picker (default: all time)
+codeburn compare -p week                # last 7 days
+codeburn compare -p today               # today only
+codeburn compare --provider claude      # Claude Code sessions only
+```
+
+Or press `c` in the dashboard to enter compare mode. Arrow keys switch periods, `b` to return.
+
+**Metrics compared**
+
+| Section | Metric | What it measures |
+|---------|--------|-----------------|
+| Performance | One-shot rate | Edits that succeed without retries |
+| Performance | Retry rate | Average retries per edit turn |
+| Performance | Self-correction | Turns where the model corrected its own mistake |
+| Efficiency | Cost / call | Average cost per API call |
+| Efficiency | Cost / edit | Average cost per edit turn |
+| Efficiency | Output tok / call | Average output tokens per call |
+| Efficiency | Cache hit rate | Proportion of input from cache |
+
+**Per-category one-shot rates.** Breaks down one-shot success by task category (Coding, Debugging, Feature Dev, etc.) so you can see where each model excels or struggles.
+
+**Working style.** Compares delegation rate (agent spawns), planning rate (TaskCreate, TaskUpdate, TodoWrite usage), average tools per turn, and fast mode usage.
+
+All metrics are computed from your local session data. No LLM calls, fully deterministic.
+
 ## How it reads data
 
 **Claude Code** stores session transcripts as JSONL at `~/.claude/projects/<sanitized-path>/<session-id>.jsonl`. Each assistant entry contains model name, token usage (input, output, cache read, cache write), tool_use blocks, and timestamps.
@@ -293,28 +358,47 @@ CodeBurn reads these files, deduplicates messages (by API message ID for Claude,
 
 ```
 src/
-  cli.ts          Commander.js entry point
-  dashboard.tsx   Ink TUI (React for terminals)
-  parser.ts       JSONL reader, dedup, date filter, provider orchestration
-  models.ts       LiteLLM pricing, cost calculation
-  classifier.ts   13-category task classifier
-  types.ts        Type definitions
-  format.ts       Text rendering (status bar)
-  menubar-json.ts Payload builder consumed by the native macOS menubar app in mac/
-  export.ts       CSV/JSON multi-period export
-  config.ts       Config file management (~/.config/codeburn/)
-  currency.ts     Currency conversion, exchange rates, Intl formatting
-  sqlite.ts       SQLite adapter (lazy-loads better-sqlite3)
-  cursor-cache.ts Cursor result cache (file-based, auto-invalidating)
+  cli.ts            Commander.js entry point
+  dashboard.tsx     Ink TUI (React for terminals)
+  parser.ts         JSONL reader, dedup, date filter, provider orchestration
+  models.ts         LiteLLM pricing, cost calculation
+  classifier.ts     13-category task classifier
+  compare-stats.ts  Model comparison engine (metrics, category breakdown, working style)
+  types.ts          Type definitions
+  format.ts         Text rendering (status bar)
+  menubar-json.ts   Payload builder consumed by the native macOS menubar app in mac/
+  export.ts         CSV/JSON multi-period export
+  config.ts         Config file management (~/.config/codeburn/)
+  currency.ts       Currency conversion, exchange rates, Intl formatting
+  sqlite.ts         SQLite adapter (node:sqlite)
+  source-cache.ts   Persistent parse cache (manifest + per-source entries)
+  discovery-cache.ts Provider directory scan caching
+  parse-progress.ts Stderr progress bar for cache rebuilds
+  provider-colors.ts Provider color and label constants
+  plans.ts          Subscription plan presets and validators
+  plan-usage.ts     Billing period math and usage projection
+  fs-utils.ts       Bounded file readers with stream support
   providers/
-    types.ts      Provider interface definitions
-    index.ts      Provider registry (lazy-loads Cursor, OpenCode)
-    claude.ts     Claude Code session discovery
-    codex.ts      Codex session discovery and JSONL parsing
-    cursor.ts     Cursor SQLite parsing, language extraction
-    opencode.ts   OpenCode SQLite session discovery and parsing
-    pi.ts         Pi/OMP agent JSONL session discovery and parsing
+    types.ts        Provider interface definitions
+    index.ts        Provider registry (lazy-loads Cursor, cursor-agent, OpenCode)
+    claude.ts       Claude Code session discovery
+    codex.ts        Codex session discovery and JSONL parsing
+    copilot.ts      GitHub Copilot session state parsing
+    cursor.ts       Cursor SQLite parsing, language extraction
+    cursor-agent.ts cursor-agent CLI transcript parsing
+    opencode.ts     OpenCode SQLite session discovery and parsing
+    pi.ts           Pi/OMP agent JSONL session discovery and parsing
 ```
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=getagentseal%2Fcodeburn&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=getagentseal/codeburn&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=getagentseal/codeburn&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=getagentseal/codeburn&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## License
 
@@ -322,6 +406,6 @@ MIT
 
 ## Credits
 
-Inspired by [ccusage](https://github.com/ryoppippi/ccusage). Pricing data from [LiteLLM](https://github.com/BerriAI/litellm). Exchange rates from [Frankfurter](https://www.frankfurter.app/).
+Inspired by [ccusage](https://github.com/ryoppippi/ccusage) and [CodexBar](https://github.com/nicklama/codexbar). Pricing data from [LiteLLM](https://github.com/BerriAI/litellm). Exchange rates from [Frankfurter](https://www.frankfurter.app/).
 
 Built by [AgentSeal](https://agentseal.org).
