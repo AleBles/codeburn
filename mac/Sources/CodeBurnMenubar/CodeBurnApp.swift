@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 import Observation
-import ServiceManagement
 
 private let refreshIntervalSeconds: UInt64 = 15
 private let nanosPerSecond: UInt64 = 1_000_000_000
@@ -136,13 +135,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func registerLoginItemIfNeeded() {
-        let service = SMAppService.mainApp
-        if service.status == .notRegistered {
-            do {
-                try service.register()
-            } catch {
-                NSLog("CodeBurn: Login item registration failed: \(error)")
+        let key = "codeburn.loginItemRegistered"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+
+        let appPath = Bundle.main.bundlePath
+        let script = "tell application \"System Events\" to make login item at end with properties {path:\"\(appPath)\", hidden:false}"
+
+        let process = Process()
+        process.launchPath = "/usr/bin/osascript"
+        process.arguments = ["-e", script]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                UserDefaults.standard.set(true, forKey: key)
             }
+        } catch {
+            NSLog("CodeBurn: Login item registration failed: \(error)")
         }
     }
 
