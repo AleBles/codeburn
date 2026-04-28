@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.3 - 2026-04-28
+
+### Added (CLI)
+- **Gemini CLI provider.** Parses `~/.gemini/tmp/<project>/chats/session-*.json` from Gemini CLI 0.38+. Uses real embedded token counts (input, output, cached, thoughts) with correct cached/fresh separation to avoid double-charging. Pricing for gemini-3.1-pro-preview, gemini-3-flash-preview, gemini-2.5-pro, gemini-2.5-flash. Tool normalization (ReadFile->Read, SearchText->Grep, Shell->Bash). Closes #166.
+- **Kiro provider.** Parses `.chat` JSON session files with token estimation and auto-model naming (`kiro-auto`). Costed at Sonnet 4.5 rates via `BUILTIN_ALIASES`.
+- **Copilot VS Code workspace transcripts.** Copilot now reads transcripts from VS Code's `workspaceStorage/*/GitHub.copilot-chat/transcripts/` in addition to the legacy `~/.copilot/session-state/` path. Tokens estimated from content length, model inferred from tool call ID prefixes. Fixes #161.
+- **Auto-model naming.** Cursor, Copilot, and Kiro store transparent model names (`cursor-auto`, `copilot-auto`, `kiro-auto`) instead of guessing the underlying model.
+
+### Fixed (CLI)
+- **Cursor provider dropped all data older than 35 days.** Hardcoded lookback silently excluded bubbles outside a 5-week window, making `--period all` return $0. Increased to 180 days. Fixes #159, fixes #163.
+- **Cursor-agent subagent transcript discovery.** Scans `subagents/` subdirectories.
+
+### Added (macOS menubar)
+- **Gemini, Kiro, Copilot, OMP tabs.** Agent tab strip now shows all detected providers. Cursor + Cursor Agent merged into a single Cursor tab.
+- **Accent color picker.** 9 Apple-style system presets in the menubar header, persisted via UserDefaults.
+- **Tab costs match selected period.** Provider tab costs now reflect the active period (Today/7 Days/30 Days/etc.) instead of always showing today.
+
+### Changed
+- Daily cache version bumped to v4 (forces recompute with auto-model naming).
+- Cursor cache versioned to invalidate stale model names.
+- Case-insensitive provider key matching for tab cost lookups.
+
 ## 0.9.2 - 2026-04-28
 
 ### Fixed

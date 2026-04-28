@@ -18,7 +18,7 @@
   <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **cursor-agent**, **OpenCode**, **Pi**, **[OMP](https://github.com/can1357/oh-my-pi)** (Oh My Pi), and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
+By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **cursor-agent**, **Gemini CLI**, **Kiro**, **OpenCode**, **Pi**, **[OMP](https://github.com/can1357/oh-my-pi)** (Oh My Pi), and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
 
 Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
@@ -37,7 +37,7 @@ npx codeburn
 ### Requirements
 
 - Node.js 20+
-- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, OpenCode, Pi (`~/.pi/agent/sessions/`), OMP (`~/.omp/agent/sessions/`), and/or GitHub Copilot (`~/.copilot/session-state/`)
+- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, Gemini CLI (`~/.gemini/tmp/`), Kiro, OpenCode, Pi (`~/.pi/agent/sessions/`), OMP (`~/.omp/agent/sessions/`), and/or GitHub Copilot (`~/.copilot/session-state/`)
 - For Cursor/OpenCode support: `better-sqlite3` is installed automatically as an optional dependency
 
 ## Usage
@@ -96,7 +96,9 @@ codeburn report --provider cursor-agent  # cursor-agent CLI only
 codeburn report --provider opencode  # OpenCode only
 codeburn report --provider pi        # Pi only
 codeburn report --provider copilot   # GitHub Copilot only
-codeburn report --provider omp        # OMP only
+codeburn report --provider gemini     # Gemini CLI only
+codeburn report --provider kiro      # Kiro only
+codeburn report --provider omp       # OMP only
 codeburn today --provider codex      # Codex today
 codeburn export --provider claude    # export Claude data only
 ```
@@ -138,17 +140,23 @@ Either flag alone is valid. Inverted or malformed dates exit with a clear error.
 | Claude Desktop | `~/Library/Application Support/Claude/local-agent-mode-sessions/` | Supported |
 | Codex (OpenAI) | `~/.codex/sessions/` | Supported |
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | Supported |
+| Gemini CLI | `~/.gemini/tmp/<project>/chats/session-*.json` | Supported |
+| Kiro | `~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/` | Supported |
 | OpenCode | `~/.local/share/opencode/` (SQLite) | Supported |
 | Pi | `~/.pi/agent/sessions/` | Supported |
 | OMP | `~/.omp/agent/sessions/` | Supported |
 | GitHub Copilot | `~/.copilot/session-state/` | Supported (output tokens only) |
-| Amp | -- | Planned (provider plugin system) |
+| Amp | -- | Planned |
 
 Codex tool names are normalized to match Claude's conventions (`exec_command` shows as `Bash`, `read_file` as `Read`, etc.) so the activity classifier and tool breakdown work across providers.
 
 Cursor reads token usage from its local SQLite database. Since Cursor's "Auto" mode hides the actual model used, costs are estimated using Sonnet pricing (labeled "Auto (Sonnet est.)" in the dashboard). The Cursor view shows a **Languages** panel (extracted from code blocks) instead of Core Tools/Shell/MCP panels, since Cursor does not log individual tool calls. First run on a large Cursor database may take up to a minute; results are cached and subsequent runs are instant.
 
-GitHub Copilot only logs output tokens in its session state, so Copilot cost rows sit below actual API cost. The model is tracked via `session.model_change` events; messages before the first model change are skipped to avoid silent misattribution.
+Gemini CLI stores sessions as single JSON files at `~/.gemini/tmp/<project>/chats/session-*.json`. Each session embeds real token counts (input, output, cached, thoughts) per message, so no estimation is needed. Gemini reports `input` tokens inclusive of `cached`; CodeBurn subtracts cached from input before pricing to avoid double-charging.
+
+Kiro stores conversations as `.chat` JSON files. Token counts are estimated from content length. The underlying model is not exposed, so sessions are labeled `kiro-auto` and costed at Sonnet rates.
+
+GitHub Copilot reads from both `~/.copilot/session-state/` (legacy CLI) and VS Code's `workspaceStorage/*/GitHub.copilot-chat/transcripts/`. The VS Code format has no explicit token counts; tokens are estimated from content length and the model is inferred from tool call ID prefixes.
 
 ### Adding a provider
 
@@ -242,7 +250,7 @@ Relaunch the app to apply. To revert: `defaults delete org.agentseal.codeburn-me
 | Conversation | No tools, pure text exchange |
 | General | Skill tool, uncategorized |
 
-**Breakdowns**: daily cost chart, per-project, per-model (Opus/Sonnet/Haiku/GPT-5/GPT-4o/Gemini), per-activity with one-shot rate, core tools, shell commands, MCP servers.
+**Breakdowns**: daily cost chart, per-project, per-model (Opus/Sonnet/Haiku/GPT-5/GPT-4o/Gemini/Kiro), per-activity with one-shot rate, core tools, shell commands, MCP servers.
 
 **One-shot rate**: For categories that involve code edits, CodeBurn detects edit/test/fix retry cycles (Edit -> Bash -> Edit patterns). The 1-shot column shows the percentage of edit turns that succeeded without retries. Coding at 90% means the AI got it right first try 9 out of 10 times.
 
@@ -358,7 +366,7 @@ Requires a git repository. Run from your project directory. Output shows cost an
 
 **Pi / OMP** stores sessions as JSONL at `~/.pi/agent/sessions/<sanitized-cwd>/*.jsonl` (Pi) and `~/.omp/agent/sessions/<sanitized-cwd>/*.jsonl` (OMP). Each assistant message carries token usage (input, output, cacheRead, cacheWrite) plus inline `toolCall` content blocks. CodeBurn extracts token counts, normalizes tool names to the standard set (`bash` -> `Bash`, `dispatch_agent` -> `Agent`), and pulls bash commands from `toolCall.arguments.command` for the shell breakdown.
 
-CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session+message ID for OpenCode, by responseId for Pi/OMP), filters by date range per entry, and classifies each turn.
+CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session ID for Gemini, by session+message ID for OpenCode, by responseId for Pi/OMP), filters by date range per entry, and classifies each turn.
 
 ## Environment variables
 
@@ -391,6 +399,8 @@ src/
     claude.ts     Claude Code session discovery
     codex.ts      Codex session discovery and JSONL parsing
     cursor.ts     Cursor SQLite parsing, language extraction
+    gemini.ts     Gemini CLI session JSON parsing
+    kiro.ts       Kiro .chat JSON session parsing
     opencode.ts   OpenCode SQLite session discovery and parsing
     pi.ts         Pi/OMP agent JSONL session discovery and parsing
 ```
