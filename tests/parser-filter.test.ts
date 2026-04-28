@@ -33,8 +33,8 @@ describe('filterProjectsByName', () => {
   })
 
   it('include is case-insensitive', () => {
-    const result = filterProjectsByName(projects, ['test'])
-    expect(result.map(p => p.project).sort()).toEqual(['test', 'dashboard'])
+    const result = filterProjectsByName(projects, ['TEST'])
+    expect(result.map(p => p.project).sort()).toEqual(['dashboard', 'test'])
   })
 
   it('include matches substring in path when name does not match', () => {
@@ -49,7 +49,7 @@ describe('filterProjectsByName', () => {
 
   it('exclude removes matching projects (AND-negation across patterns)', () => {
     const result = filterProjectsByName(projects, undefined, ['burnrate', 'sandbox'])
-    expect(result.map(p => p.project).sort()).toEqual(['test', 'dashboard'])
+    expect(result.map(p => p.project).sort()).toEqual(['dashboard', 'test'])
   })
 
   it('exclude matches path substring', () => {
