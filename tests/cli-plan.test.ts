@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 
 function runCli(args: string[], home: string) {
-  return spawnSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
+  return spawnSync(process.execPath, ['src/cli.ts', ...args], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -16,15 +16,15 @@ function runCli(args: string[], home: string) {
   })
 }
 
-describe('codeburn plan command', () => {
+describe('burnrate plan command', () => {
   it('persists plan set and clears on reset', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-plan-'))
+    const home = await mkdtemp(join(tmpdir(), 'burnrate-cli-plan-'))
 
     try {
       const setResult = runCli(['plan', 'set', 'claude-max'], home)
       expect(setResult.status).toBe(0)
 
-      const configPath = join(home, '.config', 'codeburn', 'config.json')
+      const configPath = join(home, '.config', 'burnrate', 'config.json')
       const configRaw = await readFile(configPath, 'utf-8')
       const config = JSON.parse(configRaw) as { plan?: { id?: string; monthlyUsd?: number } }
       expect(config.plan?.id).toBe('claude-max')
@@ -42,7 +42,7 @@ describe('codeburn plan command', () => {
   })
 
   it('shows invalid reset-day value in error output', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'codeburn-cli-plan-'))
+    const home = await mkdtemp(join(tmpdir(), 'burnrate-cli-plan-'))
 
     try {
       const result = runCli(['plan', 'set', 'claude-max', '--reset-day', '99'], home)

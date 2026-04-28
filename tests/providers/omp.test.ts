@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -182,7 +182,7 @@ describe('omp provider - JSONL parsing', () => {
       calls.push(call)
     }
 
-    // cost must be calculated by codeburn, not taken from usage.cost (which is zeroed in fixture)
+    // cost must be calculated by burnrate, not taken from usage.cost (which is zeroed in fixture)
     expect(calls[0]!.costUSD).toBeGreaterThanOrEqual(0)
   })
 

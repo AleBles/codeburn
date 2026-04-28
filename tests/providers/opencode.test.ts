@@ -3,7 +3,7 @@ import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { isSqliteAvailable } from '../../src/sqlite.js'
 import { createOpenCodeProvider } from '../../src/providers/opencode.js'
 import type { ParsedProviderCall } from '../../src/providers/types.js'
@@ -29,7 +29,7 @@ function createTestDb(dir: string): string {
   mkdirSync(ocDir, { recursive: true })
   const dbPath = join(ocDir, 'opencode.db')
 
-  const { DatabaseSync: Database } = require('node:sqlite')
+  const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
   const db = new Database(dbPath)
   db.exec(`
     CREATE TABLE session (
@@ -57,7 +57,7 @@ function createTestDb(dir: string): string {
 }
 
 function withTestDb(dbPath: string, fn: (db: TestDb) => void): void {
-  const { DatabaseSync: Database } = require('node:sqlite')
+  const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
   const db = new Database(dbPath)
   fn(db)
   db.close()
@@ -221,7 +221,7 @@ skipUnlessSqlite('opencode provider - session discovery', () => {
     const ocDir = join(tmpDir, 'opencode')
     await mkdir(ocDir, { recursive: true })
 
-    const { DatabaseSync: Database } = require('node:sqlite')
+    const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
     for (const file of ['opencode.db', 'opencode-dev.db']) {
       const dbPath = join(ocDir, file)
       const db = new Database(dbPath)

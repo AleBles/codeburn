@@ -8,16 +8,13 @@ import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
 import { getAllProviders } from './providers/index.js'
-import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { estimateContextBudget, discoverProjectCwd, type ContextBudget } from './context-budget.js'
 import { dateKey } from './day-aggregator.js'
-import { CompareView } from './compare.js'
 import { getPlanUsageOrNull, type PlanUsage } from './plan-usage.js'
 import { planDisplayName } from './plans.js'
 import { join } from 'path'
 
 type Period = 'today' | 'week' | '30days' | 'month' | 'all'
-type View = 'dashboard' | 'optimize' | 'compare'
 
 const PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all']
 const PERIOD_LABELS: Record<Period, string> = {
@@ -80,8 +77,6 @@ const CATEGORY_COLORS: Record<TaskCategory, string> = {
   brainstorming: '#F55BE0',
   general: '#666666',
 }
-
-const IMPACT_PANEL_COLORS: Record<string, string> = { high: '#F55B5B', medium: ORANGE, low: DIM }
 
 function toHex(r: number, g: number, b: number): string {
   return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('')
@@ -194,7 +189,7 @@ function Overview({ projects, label, width, planUsage }: { projects: ProjectSumm
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={PANEL_COLORS.overview} paddingX={1} width={width}>
       <Text wrap="truncate-end">
-        <Text bold color={ORANGE}>CodeBurn</Text>
+        <Text bold color={ORANGE}>BurnRate</Text>
         <Text dimColor>  {label}</Text>
       </Text>
       <Text wrap="truncate-end">
@@ -235,6 +230,7 @@ function Overview({ projects, label, width, planUsage }: { projects: ProjectSumm
 function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSummary[]; days?: number; pw: number; bw: number }) {
   const dailyCosts: Record<string, number> = {}
   const dailyCalls: Record<string, number> = {}
+  const dailyTokens: Record<string, number> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const turn of session.turns) {
@@ -242,6 +238,10 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
         const day = dateKey(turn.timestamp)
         dailyCosts[day] = (dailyCosts[day] ?? 0) + turn.assistantCalls.reduce((s, c) => s + c.costUSD, 0)
         dailyCalls[day] = (dailyCalls[day] ?? 0) + turn.assistantCalls.length
+        dailyTokens[day] = (dailyTokens[day] ?? 0) + turn.assistantCalls.reduce(
+          (s, c) => s + c.usage.inputTokens + c.usage.outputTokens + c.usage.cacheReadInputTokens + c.usage.cacheCreationInputTokens,
+          0,
+        )
       }
     }
   }
@@ -250,12 +250,13 @@ function DailyActivity({ projects, days = 14, pw, bw }: { projects: ProjectSumma
 
   return (
     <Panel title="Daily Activity" color={PANEL_COLORS.daily} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(6 + bw)}{'cost'.padStart(8)}{'calls'.padStart(6)}</Text>
+      <Text dimColor wrap="truncate-end">{''.padEnd(6 + bw)}{'cost'.padStart(8)}{'tokens'.padStart(8)}{'calls'.padStart(6)}</Text>
       {sortedDays.map(day => (
         <Text key={day} wrap="truncate-end">
           <Text dimColor>{day.slice(5)} </Text>
           <HBar value={dailyCosts[day] ?? 0} max={maxCost} width={bw} />
           <Text color={GOLD}>{formatCost(dailyCosts[day] ?? 0).padStart(8)}</Text>
+          <Text color="#7B9EF5">{formatTokens(dailyTokens[day] ?? 0).padStart(8)}</Text>
           <Text>{String(dailyCalls[day] ?? 0).padStart(6)}</Text>
         </Text>
       ))}
@@ -278,8 +279,17 @@ function shortProject(encoded: string): string {
 }
 
 const PROJECT_COL_AVG = 7
-const PROJECT_COL_BASE_WIDTH = 30
-const PROJECT_COL_WITH_OVERHEAD_WIDTH = 40
+const PROJECT_COL_TOKENS = 8
+const PROJECT_COL_BASE_WIDTH = 38
+const PROJECT_COL_WITH_OVERHEAD_WIDTH = 48
+
+function projectTotalTokens(project: ProjectSummary): number {
+  let total = 0
+  for (const s of project.sessions) {
+    total += s.totalInputTokens + s.totalOutputTokens + s.totalCacheReadTokens + s.totalCacheWriteTokens
+  }
+  return total
+}
 
 function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSummary[]; pw: number; bw: number; budgets?: Map<string, ContextBudget> }) {
   const maxCost = Math.max(...projects.map(p => p.totalCostUSD))
@@ -288,7 +298,7 @@ function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSumm
   return (
     <Panel title="By Project" color={PANEL_COLORS.project} width={pw}>
       <Text dimColor wrap="truncate-end">
-        {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}{hasBudgets ? 'overhead'.padStart(10) : ''}
+        {''.padEnd(bw + 1 + nw)}{'cost'.padStart(8)}{'tokens'.padStart(PROJECT_COL_TOKENS)}{'avg/s'.padStart(PROJECT_COL_AVG)}{'sess'.padStart(6)}{hasBudgets ? 'overhead'.padStart(10) : ''}
       </Text>
       {projects.slice(0, 8).map((project, i) => {
         const budget = budgets?.get(project.project)
@@ -300,6 +310,7 @@ function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSumm
             <HBar value={project.totalCostUSD} max={maxCost} width={bw} />
             <Text dimColor> {fit(shortProject(project.project), nw)}</Text>
             <Text color={GOLD}>{formatCost(project.totalCostUSD).padStart(8)}</Text>
+            <Text color="#7B9EF5">{formatTokens(projectTotalTokens(project)).padStart(PROJECT_COL_TOKENS)}</Text>
             <Text color={GOLD}>{avgCost.padStart(PROJECT_COL_AVG)}</Text>
             <Text>{String(project.sessions.length).padStart(6)}</Text>
             {hasBudgets && <Text color="#7B9EF5">{(budget ? formatTokens(budget.total) : '-').padStart(10)}</Text>}
@@ -311,19 +322,21 @@ function ProjectBreakdown({ projects, pw, bw, budgets }: { projects: ProjectSumm
 }
 
 const MODEL_COL_COST = 8
+const MODEL_COL_TOKENS = 8
 const MODEL_COL_CACHE = 7
 const MODEL_COL_CALLS = 7
 const MODEL_NAME_WIDTH = 14
 
 function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
-  const modelTotals: Record<string, { calls: number; costUSD: number; freshInput: number; cacheRead: number; cacheWrite: number }> = {}
+  const modelTotals: Record<string, { calls: number; costUSD: number; freshInput: number; output: number; cacheRead: number; cacheWrite: number }> = {}
   for (const project of projects) {
     for (const session of project.sessions) {
       for (const [model, data] of Object.entries(session.modelBreakdown)) {
-        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, freshInput: 0, cacheRead: 0, cacheWrite: 0 }
+        if (!modelTotals[model]) modelTotals[model] = { calls: 0, costUSD: 0, freshInput: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
         modelTotals[model].calls += data.calls
         modelTotals[model].costUSD += data.costUSD
         modelTotals[model].freshInput += data.tokens.inputTokens
+        modelTotals[model].output += data.tokens.outputTokens
         modelTotals[model].cacheRead += data.tokens.cacheReadInputTokens
         modelTotals[model].cacheWrite += data.tokens.cacheCreationInputTokens
       }
@@ -334,16 +347,18 @@ function ModelBreakdown({ projects, pw, bw }: { projects: ProjectSummary[]; pw: 
 
   return (
     <Panel title="By Model" color={PANEL_COLORS.model} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}{'cost'.padStart(MODEL_COL_COST)}{'cache'.padStart(MODEL_COL_CACHE)}{'calls'.padStart(MODEL_COL_CALLS)}</Text>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + MODEL_NAME_WIDTH)}{'cost'.padStart(MODEL_COL_COST)}{'tokens'.padStart(MODEL_COL_TOKENS)}{'cache'.padStart(MODEL_COL_CACHE)}{'calls'.padStart(MODEL_COL_CALLS)}</Text>
       {sorted.map(([model, data], i) => {
-        const totalInput = data.freshInput + data.cacheRead + data.cacheWrite
-        const cacheHit = totalInput > 0 ? (data.cacheRead / totalInput) * 100 : 0
-        const cacheLabel = totalInput > 0 ? `${cacheHit.toFixed(1)}%` : '-'
+        const totalInputForCache = data.freshInput + data.cacheRead + data.cacheWrite
+        const cacheHit = totalInputForCache > 0 ? (data.cacheRead / totalInputForCache) * 100 : 0
+        const cacheLabel = totalInputForCache > 0 ? `${cacheHit.toFixed(1)}%` : '-'
+        const totalTokens = data.freshInput + data.output + data.cacheRead + data.cacheWrite
         return (
           <Text key={`${model}-${i}`} wrap="truncate-end">
             <HBar value={data.costUSD} max={maxCost} width={bw} />
             <Text> {fit(model, MODEL_NAME_WIDTH)}</Text>
             <Text color={GOLD}>{formatCost(data.costUSD).padStart(MODEL_COL_COST)}</Text>
+            <Text color="#7B9EF5">{formatTokens(totalTokens).padStart(MODEL_COL_TOKENS)}</Text>
             <Text>{cacheLabel.padStart(MODEL_COL_CACHE)}</Text>
             <Text>{String(data.calls).padStart(MODEL_COL_CALLS)}</Text>
           </Text>
@@ -420,6 +435,7 @@ function ToolBreakdown({ projects, pw, bw, title, filterPrefix }: { projects: Pr
 
 const TOP_SESSIONS_DATE_LEN = 10
 const TOP_SESSIONS_COST_COL = 8
+const TOP_SESSIONS_TOKENS_COL = 8
 const TOP_SESSIONS_CALLS_COL = 6
 
 function TopSessions({ projects, pw, bw }: { projects: ProjectSummary[]; pw: number; bw: number }) {
@@ -433,21 +449,23 @@ function TopSessions({ projects, pw, bw }: { projects: ProjectSummary[]; pw: num
   }
 
   const maxCost = top[0].totalCostUSD
-  const nw = Math.max(8, pw - bw - TOP_SESSIONS_COST_COL - TOP_SESSIONS_CALLS_COL - 1 - PANEL_CHROME)
+  const nw = Math.max(8, pw - bw - TOP_SESSIONS_COST_COL - TOP_SESSIONS_TOKENS_COL - TOP_SESSIONS_CALLS_COL - 1 - PANEL_CHROME)
 
   return (
     <Panel title="Top Sessions" color={PANEL_COLORS.sessions} width={pw}>
-      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'cost'.padStart(TOP_SESSIONS_COST_COL)}{'calls'.padStart(TOP_SESSIONS_CALLS_COL)}</Text>
+      <Text dimColor wrap="truncate-end">{''.padEnd(bw + 1 + nw)}{'cost'.padStart(TOP_SESSIONS_COST_COL)}{'tokens'.padStart(TOP_SESSIONS_TOKENS_COL)}{'calls'.padStart(TOP_SESSIONS_CALLS_COL)}</Text>
       {top.map((session, i) => {
         const date = session.firstTimestamp
           ? session.firstTimestamp.slice(0, TOP_SESSIONS_DATE_LEN)
           : '----------'
         const label = `${date} ${shortProject(session.projectName)}`
+        const totalTokens = session.totalInputTokens + session.totalOutputTokens + session.totalCacheReadTokens + session.totalCacheWriteTokens
         return (
           <Text key={`${session.sessionId}-${i}`} wrap="truncate-end">
             <HBar value={session.totalCostUSD} max={maxCost} width={bw} />
             <Text dimColor> {fit(label, nw - 1)}</Text>
             <Text color={GOLD}>{formatCost(session.totalCostUSD).padStart(TOP_SESSIONS_COST_COL)}</Text>
+            <Text color="#7B9EF5">{formatTokens(totalTokens).padStart(TOP_SESSIONS_TOKENS_COL)}</Text>
             <Text>{String(session.apiCalls).padStart(TOP_SESSIONS_CALLS_COL)}</Text>
           </Text>
         )
@@ -517,66 +535,11 @@ function PeriodTabs({ active, providerName, showProvider }: { active: Period; pr
   )
 }
 
-function FindingAction({ action }: { action: WasteAction }) {
-  const lines = action.type === 'file-content' ? action.content.split('\n') : action.type === 'command' ? action.text.split('\n') : [action.text]
-  return (<><Text dimColor>{action.label}</Text>{lines.map((line, i) => <Text key={i} color="#5BF5E0">  {line}</Text>)}</>)
-}
-
-function FindingPanel({ index, finding, costRate, width }: { index: number; finding: WasteFinding; costRate: number; width: number }) {
-  const costSaved = finding.tokensSaved * costRate
-  const color = IMPACT_PANEL_COLORS[finding.impact] ?? DIM
-  const label = finding.impact.charAt(0).toUpperCase() + finding.impact.slice(1)
-  const trendBadge = finding.trend === 'improving' ? ' improving \u2193' : ''
-  return (
-    <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} width={width}>
-      <Text wrap="truncate-end">
-        <Text bold>{index}. {finding.title}</Text>
-        <Text>  </Text>
-        <Text color={color}>{label}</Text>
-        {trendBadge && <Text color="#5BF5A0">{trendBadge}</Text>}
-      </Text>
-      <Text dimColor wrap="wrap">{finding.explanation}</Text>
-      <Text color={GOLD}>Savings: ~{formatTokens(finding.tokensSaved)} tokens (~{formatCost(costSaved)})</Text>
-      <Text> </Text>
-      <FindingAction action={finding.fix} />
-    </Box>
-  )
-}
-
-const GRADE_COLORS: Record<string, string> = { A: '#5BF5A0', B: '#5BF5A0', C: GOLD, D: ORANGE, F: '#F55B5B' }
-
-function OptimizeView({ findings, costRate, projects, label, width, healthScore, healthGrade }: { findings: WasteFinding[]; costRate: number; projects: ProjectSummary[]; label: string; width: number; healthScore: number; healthGrade: string }) {
-  const periodCost = projects.reduce((s, p) => s + p.totalCostUSD, 0)
-  const totalTokens = findings.reduce((s, f) => s + f.tokensSaved, 0)
-  const totalCost = totalTokens * costRate
-  const pctRaw = periodCost > 0 ? (totalCost / periodCost) * 100 : 0
-  const pct = pctRaw >= 1 ? pctRaw.toFixed(0) : pctRaw.toFixed(1)
-  const gradeColor = GRADE_COLORS[healthGrade] ?? DIM
-  return (
-    <Box flexDirection="column" width={width}>
-      <Box flexDirection="column" borderStyle="round" borderColor={ORANGE} paddingX={1} width={width}>
-        <Text wrap="truncate-end">
-          <Text bold color={ORANGE}>CodeBurn Optimize</Text>
-          <Text dimColor>  {label}   Setup: </Text>
-          <Text bold color={gradeColor}>{healthGrade}</Text>
-          <Text dimColor> ({healthScore}/100)</Text>
-        </Text>
-        <Text color="#5BF5A0" wrap="truncate-end">Savings: ~{formatTokens(totalTokens)} tokens (~{formatCost(totalCost)}, ~{pct}% of spend)</Text>
-      </Box>
-      {findings.map((f, i) => <FindingPanel key={i} index={i + 1} finding={f} costRate={costRate} width={width} />)}
-      <Box paddingX={1} width={width}><Text dimColor>Token estimates are approximate.</Text></Box>
-    </Box>
-  )
-}
-
-function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable, compareAvailable }: { width: number; showProvider?: boolean; view?: View; findingCount?: number; optimizeAvailable?: boolean; compareAvailable?: boolean }) {
-  const isOptimize = view === 'optimize'
+function StatusBar({ width, showProvider }: { width: number; showProvider?: boolean }) {
   return (
     <Box borderStyle="round" borderColor={DIM} width={width} flexDirection="column" alignItems="center" paddingX={1}>
       <Text>
-        {isOptimize
-          ? <><Text color={ORANGE} bold>b</Text><Text dimColor> back   </Text></>
-          : <><Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text><Text dimColor> switch   </Text></>}
+        <Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text><Text dimColor> switch   </Text>
         <Text color={ORANGE} bold>{'↑ / PgUp'}</Text><Text color={ORANGE}>{'↓ / PgDn'}</Text><Text dimColor> scroll </Text>
         <Text color={ORANGE} bold>q</Text><Text dimColor> quit   </Text>
         <Text color={ORANGE} bold>1</Text><Text dimColor> today   </Text>
@@ -584,12 +547,6 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable,
         <Text color={ORANGE} bold>3</Text><Text dimColor> 30 days   </Text>
         <Text color={ORANGE} bold>4</Text><Text dimColor> month   </Text>
         <Text color={ORANGE} bold>5</Text><Text dimColor> all time</Text>
-        {!isOptimize && optimizeAvailable && findingCount != null && findingCount > 0 && (
-          <><Text dimColor>   </Text><Text color={ORANGE} bold>o</Text><Text dimColor> optimize</Text><Text color="#F55B5B"> ({findingCount})</Text></>
-        )}
-        {!isOptimize && compareAvailable && (
-          <><Text dimColor>   </Text><Text color={ORANGE} bold>c</Text><Text dimColor> compare</Text></>
-        )}
         {showProvider && (<><Text dimColor>   </Text><Text color={ORANGE} bold>p</Text><Text dimColor> provider</Text></>)}
       </Text>
     </Box>
@@ -605,12 +562,11 @@ const FIXED_ROWS = 10 // PeriodTabs(1) + Overview(5) + StatusBar(4)
 function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsage, scrollHeight  }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsage?: PlanUsage; scrollHeight?: number }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
-  if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
+  if (projects.length === 0) return <Panel title="BurnRate" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
   const days = period === 'all' ? undefined : (period === 'month' || period === '30days' ? 31 : 14)
   const content = (
     <>
-      <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} planUsage={planUsage} />
       <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} /></Row>
       <TopSessions projects={projects} pw={dashWidth} bw={barWidth} />
       <Row wide={wide} width={dashWidth}><ActivityBreakdown projects={projects} pw={pw} bw={barWidth} /><ModelBreakdown projects={projects} pw={pw} bw={barWidth} /></Row>
@@ -623,7 +579,7 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
   )
   return (
       <Box flexDirection="column" width={dashWidth}>
-        <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
+        <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} planUsage={planUsage} />
         {scrollHeight != null ? (
             <ScrollPanel height={scrollHeight}>{content}</ScrollPanel>
         ) : (
@@ -648,22 +604,14 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const [loading, setLoading] = useState(false)
   const [activeProvider, setActiveProvider] = useState(initialProvider)
   const [detectedProviders, setDetectedProviders] = useState<string[]>([])
-  const [view, setView] = useState<View>('dashboard')
-  const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null)
   const [projectBudgets, setProjectBudgets] = useState<Map<string, ContextBudget>>(new Map())
   const [planUsage, setPlanUsage] = useState<PlanUsage | undefined>(initialPlanUsage)
   const { columns } = useWindowSize()
   const totalRows = Math.max(process.stdout.rows, FIXED_ROWS)
   const { dashWidth } = getLayout(columns)
   const multipleProviders = detectedProviders.length > 1
-  const optimizeAvailable = activeProvider === 'all' || activeProvider === 'claude'
-  const modelCount = new Set(
-    projects.flatMap(p => p.sessions.flatMap(s => Object.keys(s.modelBreakdown)))
-  ).size
-  const compareAvailable = modelCount >= 2
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reloadGenerationRef = useRef(0)
-  const findingCount = optimizeResult?.findings.length ?? 0
   const scrollHeight = totalRows - FIXED_ROWS
 
   useEffect(() => {
@@ -694,22 +642,9 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
     return () => { cancelled = true }
   }, [projects])
 
-  useEffect(() => {
-    if (!optimizeAvailable) { setOptimizeResult(null); return }
-    let cancelled = false
-    async function scan() {
-      if (projects.length === 0) { setOptimizeResult(null); return }
-      const result = await scanAndDetect(projects, getDateRange(period))
-      if (!cancelled) setOptimizeResult(result)
-    }
-    scan()
-    return () => { cancelled = true }
-  }, [projects, period, optimizeAvailable])
-
   const reloadData = useCallback(async (p: Period, prov: string) => {
     const generation = ++reloadGenerationRef.current
     setLoading(true)
-    setOptimizeResult(null)
     try {
       const range = getDateRange(p)
       const data = await parseAllSessions(range, prov)
@@ -753,12 +688,9 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
 
   useInput((input, key) => {
     if (input === 'q') { exit(); return }
-    if (input === 'o' && findingCount > 0 && view === 'dashboard' && optimizeAvailable) { setView('optimize'); return }
-    if ((input === 'b' || key.escape) && view === 'optimize') { setView('dashboard'); return }
-    if (input === 'c' && compareAvailable && view === 'dashboard') { setView('compare'); return }
-    if (input === 'p' && multipleProviders && view !== 'compare') {
+    if (input === 'p' && multipleProviders) {
       const opts = ['all', ...detectedProviders]; const next = opts[(opts.indexOf(activeProvider) + 1) % opts.length]
-      setActiveProvider(next); setView('dashboard')
+      setActiveProvider(next)
       if (debounceRef.current) clearTimeout(debounceRef.current)
       reloadData(period, next); return
     }
@@ -775,30 +707,18 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   if (loading) {
     return (
       <Box flexDirection="column" width={dashWidth} height={totalRows}>
-        <PeriodTabs active={period} providerName={activeProvider} showProvider={view !== 'compare' && multipleProviders} />
-        {view === 'compare'
-          ? <Box flexDirection="column" paddingX={2} paddingY={1}>
-              <Box flexDirection="column" borderStyle="round" borderColor={ORANGE} paddingX={1}>
-                <Text bold color={ORANGE}>Model Comparison</Text>
-                <Text> </Text>
-                <Text dimColor>Loading {PERIOD_LABELS[period]} model data...</Text>
-              </Box>
-            </Box>
-          : <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>Loading {PERIOD_LABELS[period]}...</Text></Panel>}
-        {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={0} optimizeAvailable={false} compareAvailable={false} />}
+        <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
+        <Panel title="BurnRate" color={ORANGE} width={dashWidth}><Text dimColor>Loading {PERIOD_LABELS[period]}...</Text></Panel>
+        <StatusBar width={dashWidth} showProvider={multipleProviders} />
       </Box>
     )
   }
 
   return (
     <Box flexDirection="column" width={dashWidth} height={totalRows}>
-      <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders && view !== 'compare'} />
-      {view === 'compare'
-        ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
-        : view === 'optimize' && optimizeResult
-          ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} />
-          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsage={planUsage} scrollHeight={scrollHeight}/>}
-      {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} />}
+      <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
+      <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsage={planUsage} scrollHeight={scrollHeight}/>
+      <StatusBar width={dashWidth} showProvider={multipleProviders} />
     </Box>
   )
 }

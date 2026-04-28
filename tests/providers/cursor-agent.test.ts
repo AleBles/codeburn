@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
@@ -46,7 +46,7 @@ async function collectCalls(provider: Provider, source: SessionSource): Promise<
 }
 
 function withTestDb(dbPath: string, fn: (db: TestDb) => void): void {
-  const { DatabaseSync: Database } = require('node:sqlite')
+  const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
   const db = new Database(dbPath)
   fn(db)
   db.close()
@@ -179,7 +179,7 @@ describe('cursor-agent provider', () => {
 
     const provider = createCursorAgentProvider(baseDir)
     const source = (await provider.discoverSessions())[0]!
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const stderrSpy = spyOn(process.stderr, 'write').mockImplementation(() => true)
 
     const calls = await collectCalls(provider, source)
 

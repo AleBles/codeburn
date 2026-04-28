@@ -1,14 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 
-import { computePeriodFromResetDay, getPlanUsage, getPlanUsageFromProjects } from '../src/plan-usage.js'
+const parseAllSessionsMock = mock(async () => [] as unknown[])
 
-const { parseAllSessionsMock } = vi.hoisted(() => ({
-  parseAllSessionsMock: vi.fn(),
-}))
-
-vi.mock('../src/parser.js', () => ({
+mock.module('../src/parser.js', () => ({
   parseAllSessions: parseAllSessionsMock,
 }))
+
+import { computePeriodFromResetDay, getPlanUsage, getPlanUsageFromProjects } from '../src/plan-usage.js'
 
 describe('computePeriodFromResetDay', () => {
   it('uses current month when today is on/after reset day', () => {

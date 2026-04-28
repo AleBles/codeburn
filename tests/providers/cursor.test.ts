@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { getAllProviders } from '../../src/providers/index.js'
 import type { Provider } from '../../src/providers/types.js'
 
@@ -60,11 +60,10 @@ describe('cursor sqlite adapter', () => {
     expect(typeof available).toBe('boolean')
   })
 
-  it('provides error message when not available', async () => {
-    const { getSqliteLoadError } = await import('../../src/sqlite.js')
-    const error = getSqliteLoadError()
-    expect(typeof error).toBe('string')
-    expect(error.length).toBeGreaterThan(0)
+  it('provides empty error when SQLite is available', async () => {
+    const { getSqliteLoadError, isSqliteAvailable } = await import('../../src/sqlite.js')
+    expect(isSqliteAvailable()).toBe(true)
+    expect(getSqliteLoadError()).toBe('')
   })
 })
 

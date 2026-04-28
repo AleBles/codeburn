@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, spyOn } from 'bun:test'
 import { mkdtemp, writeFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -14,7 +14,7 @@ describe('readSessionFile', () => {
   const tmpDirs: string[] = []
 
   afterEach(async () => {
-    delete process.env.CODEBURN_VERBOSE
+    delete process.env.BURNRATE_VERBOSE
     while (tmpDirs.length > 0) {
       const d = tmpDirs.pop()
       if (d) await rm(d, { recursive: true, force: true })
@@ -22,7 +22,7 @@ describe('readSessionFile', () => {
   })
 
   async function tmpPath(content: string | Buffer): Promise<string> {
-    const base = await mkdtemp(join(tmpdir(), 'codeburn-fs-'))
+    const base = await mkdtemp(join(tmpdir(), 'burnrate-fs-'))
     tmpDirs.push(base)
     const p = join(base, 'x.jsonl')
     await writeFile(p, content)
@@ -46,14 +46,14 @@ describe('readSessionFile', () => {
     expect(await readSessionFile(p)).toBeNull()
   })
 
-  it('emits stderr warning under CODEBURN_VERBOSE=1 for skipped file', async () => {
-    process.env.CODEBURN_VERBOSE = '1'
+  it('emits stderr warning under BURNRATE_VERBOSE=1 for skipped file', async () => {
+    process.env.BURNRATE_VERBOSE = '1'
     const p = await tmpPath(Buffer.alloc(MAX_SESSION_FILE_BYTES + 1, 'c'))
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const spy = spyOn(process.stderr, 'write').mockImplementation(() => true)
     await readSessionFile(p)
     expect(spy).toHaveBeenCalled()
     const msg = (spy.mock.calls[0][0] as string)
-    expect(msg).toContain('codeburn')
+    expect(msg).toContain('burnrate')
     expect(msg).toContain('oversize')
     spy.mockRestore()
   })
@@ -74,7 +74,7 @@ describe('readSessionLines', () => {
   })
 
   async function tmpPath(content: string): Promise<string> {
-    const base = await mkdtemp(join(tmpdir(), 'codeburn-lines-'))
+    const base = await mkdtemp(join(tmpdir(), 'burnrate-lines-'))
     tmpDirs.push(base)
     const p = join(base, 'session.jsonl')
     await writeFile(p, content)

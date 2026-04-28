@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach } from 'bun:test'
 
 import { getModelCosts, getShortModelName, calculateCost, loadPricing, setModelAliases } from '../src/models.js'
 

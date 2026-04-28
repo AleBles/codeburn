@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'bun:test'
 import { mkdtemp, mkdir, cp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -11,7 +11,7 @@ import type { DateRange } from '../../src/types.js'
 const FIXTURE_DAY = Date.UTC(2026, 3, 16) // month index 3 = April (Date.UTC is 0-indexed)
 const RANGE_BEFORE_MS = FIXTURE_DAY - 24 * 60 * 60 * 1000
 const RANGE_AFTER_MS = FIXTURE_DAY + 24 * 60 * 60 * 1000
-const PROJECT_NAME = 'codeburn-poc-testing'
+const PROJECT_NAME = 'burnrate-poc-testing'
 
 function makeRange(offsetMs: number): DateRange {
   return {
@@ -48,7 +48,7 @@ describe('HIGH-1 prototype pollution via unchecked bracket-assign', () => {
   })
 
   async function setupPoc(fixture: string): Promise<string> {
-    const base = await mkdtemp(join(tmpdir(), 'codeburn-sec-'))
+    const base = await mkdtemp(join(tmpdir(), 'burnrate-sec-'))
     tmpDirs.push(base)
     const projectDir = join(base, 'projects', PROJECT_NAME)
     await mkdir(projectDir, { recursive: true })
@@ -59,19 +59,19 @@ describe('HIGH-1 prototype pollution via unchecked bracket-assign', () => {
 
   it('does not pollute Object.prototype when session contains tool_use name "__proto__"', async () => {
     await setupPoc('proto-tool.jsonl')
-    await expect(parseAllSessions(makeRange(0), 'claude')).resolves.not.toThrow()
+    await parseAllSessions(makeRange(0), 'claude')
     expect(({} as Record<string, unknown>).calls).toBeUndefined()
   })
 
   it('does not pollute Object.prototype when bash command basename is "__proto__"', async () => {
     await setupPoc('proto-bash.jsonl')
-    await expect(parseAllSessions(makeRange(1), 'claude')).resolves.not.toThrow()
+    await parseAllSessions(makeRange(1), 'claude')
     expect(({} as Record<string, unknown>).calls).toBeUndefined()
   })
 
   it('does not pollute Object.prototype when model name is "__proto__"', async () => {
     await setupPoc('proto-model.jsonl')
-    await expect(parseAllSessions(makeRange(2), 'claude')).resolves.not.toThrow()
+    await parseAllSessions(makeRange(2), 'claude')
     expect(({} as Record<string, unknown>).calls).toBeUndefined()
   })
 })

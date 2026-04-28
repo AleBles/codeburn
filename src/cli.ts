@@ -1,31 +1,21 @@
+#!/usr/bin/env bun
 import { Command } from 'commander'
-import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
 import { loadPricing, setModelAliases } from './models.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
-import { type PeriodData, type ProviderCost } from './menubar-json.js'
-import { buildMenubarPayload } from './menubar-json.js'
-import { addNewDays, getDaysInRange, loadDailyCache, saveDailyCache, withDailyCacheLock } from './daily-cache.js'
-import { aggregateProjectsIntoDays, buildPeriodDataFromDays, dateKey } from './day-aggregator.js'
+import { dateKey } from './day-aggregator.js'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
 import { renderDashboard } from './dashboard.js'
 import { parseDateRangeFlags } from './cli-date.js'
-import { runOptimize, scanAndDetect } from './optimize.js'
-import { renderCompare } from './compare.js'
-import { getAllProviders } from './providers/index.js'
 import { clearPlan, readConfig, readPlan, saveConfig, savePlan, getConfigFilePath, type PlanId } from './config.js'
 import { clampResetDay, getPlanUsageOrNull, type PlanUsage } from './plan-usage.js'
 import { getPresetPlan, isPlanId, isPlanProvider, planDisplayName } from './plans.js'
-import { createRequire } from 'node:module'
+import pkg from '../package.json' with { type: 'json' }
 
-const require = createRequire(import.meta.url)
-const { version } = require('../package.json')
+const version = pkg.version
 import { loadCurrency, getCurrency, isValidCurrencyCode } from './currency.js'
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000
-const BACKFILL_DAYS = 365
 
 function toDateString(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -133,8 +123,8 @@ async function runJsonReport(period: Period, provider: string, project: string[]
 }
 
 const program = new Command()
-  .name('codeburn')
-  .description('See where your AI coding tokens go - by task, tool, model, and project')
+  .name('burnrate')
+  .description('CLI for monitoring AI token spend and costs across Claude Code, Codex, Cursor, and other agents')
   .version(version)
   .option('--verbose', 'print warnings to stderr on read failures and skipped files')
 
@@ -142,7 +132,7 @@ program.hook('preAction', async (thisCommand) => {
   const config = await readConfig()
   setModelAliases(config.modelAliases ?? {})
   if (thisCommand.opts<{ verbose?: boolean }>().verbose) {
-    process.env['CODEBURN_VERBOSE'] = '1'
+    process.env['BURNRATE_VERBOSE'] = '1'
   }
   await loadCurrency()
 })
@@ -158,8 +148,8 @@ function buildJsonReport(projects: ProjectSummary[], period: string, periodKey: 
   const totalOutput = sessions.reduce((s, sess) => s + sess.totalOutputTokens, 0)
   const totalCacheRead = sessions.reduce((s, sess) => s + sess.totalCacheReadTokens, 0)
   const totalCacheWrite = sessions.reduce((s, sess) => s + sess.totalCacheWriteTokens, 0)
-  // Match src/menubar-json.ts:cacheHitPercent: reads over reads+fresh-input. cache_write
-  // counts tokens being stored, not served, so it doesn't belong in the denominator.
+  // Cache hit ratio: reads over reads+fresh-input. cache_write counts tokens being stored,
+  // not served, so it doesn't belong in the denominator.
   const cacheHitDenom = totalInput + totalCacheRead
   const cacheHitPercent = cacheHitDenom > 0 ? Math.round((totalCacheRead / cacheHitDenom) * 1000) / 10 : 0
 
@@ -320,10 +310,19 @@ program
     await renderDashboard(period, opts.provider, opts.refresh, opts.project, opts.exclude, customRange)
   })
 
+type PeriodData = {
+  label: string
+  cost: number
+  calls: number
+  sessions: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+}
+
 function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData {
   const sessions = projects.flatMap(p => p.sessions)
-  const catTotals: Record<string, { turns: number; cost: number; editTurns: number; oneShotTurns: number }> = {}
-  const modelTotals: Record<string, { calls: number; cost: number }> = {}
   let inputTokens = 0, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0
 
   for (const sess of sessions) {
@@ -331,18 +330,6 @@ function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData 
     outputTokens += sess.totalOutputTokens
     cacheReadTokens += sess.totalCacheReadTokens
     cacheWriteTokens += sess.totalCacheWriteTokens
-    for (const [cat, d] of Object.entries(sess.categoryBreakdown)) {
-      if (!catTotals[cat]) catTotals[cat] = { turns: 0, cost: 0, editTurns: 0, oneShotTurns: 0 }
-      catTotals[cat].turns += d.turns
-      catTotals[cat].cost += d.costUSD
-      catTotals[cat].editTurns += d.editTurns
-      catTotals[cat].oneShotTurns += d.oneShotTurns
-    }
-    for (const [model, d] of Object.entries(sess.modelBreakdown)) {
-      if (!modelTotals[model]) modelTotals[model] = { calls: 0, cost: 0 }
-      modelTotals[model].calls += d.calls
-      modelTotals[model].cost += d.costUSD
-    }
   }
 
   return {
@@ -351,182 +338,20 @@ function buildPeriodData(label: string, projects: ProjectSummary[]): PeriodData 
     calls: projects.reduce((s, p) => s + p.totalApiCalls, 0),
     sessions: projects.reduce((s, p) => s + p.sessions.length, 0),
     inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
-    categories: Object.entries(catTotals)
-      .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([cat, d]) => ({ name: CATEGORY_LABELS[cat as TaskCategory] ?? cat, ...d })),
-    models: Object.entries(modelTotals)
-      .sort(([, a], [, b]) => b.cost - a.cost)
-      .map(([name, d]) => ({ name, ...d })),
   }
 }
 
 program
   .command('status')
   .description('Compact status output (today + week + month)')
-  .option('--format <format>', 'Output format: terminal, menubar-json, json', 'terminal')
+  .option('--format <format>', 'Output format: terminal, json', 'terminal')
   .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
   .option('--project <name>', 'Show only projects matching name (repeatable)', collect, [])
   .option('--exclude <name>', 'Exclude projects matching name (repeatable)', collect, [])
-  .option('--period <period>', 'Primary period for menubar-json: today, week, 30days, month, all', 'today')
-  .option('--no-optimize', 'Skip optimize findings (menubar-json only, faster)')
   .action(async (opts) => {
     await loadPricing()
     const pf = opts.provider
     const fp = (p: ProjectSummary[]) => filterProjectsByName(p, opts.project, opts.exclude)
-    if (opts.format === 'menubar-json') {
-      const periodInfo = getDateRange(opts.period)
-      const now = new Date()
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      const yesterdayEnd = new Date(todayStart.getTime() - 1)
-      const yesterdayStr = toDateString(new Date(todayStart.getTime() - MS_PER_DAY))
-      const isAllProviders = pf === 'all'
-
-      // The daily cache is provider-agnostic: always backfill it from .all so subsequent
-      // provider-filtered reads can derive per-provider cost+calls from DailyEntry.providers.
-      // Yesterday is always recomputed: it may have been cached mid-day with partial data.
-      const cache = await withDailyCacheLock(async () => {
-        let c = await loadDailyCache()
-
-        // Evict yesterday (and any stale future entries) so the gap fill recomputes them.
-        const hadYesterday = c.days.some(d => d.date >= yesterdayStr)
-        if (hadYesterday) {
-          const freshDays = c.days.filter(d => d.date < yesterdayStr)
-          const latestFresh = freshDays.length > 0 ? freshDays[freshDays.length - 1].date : null
-          c = { ...c, days: freshDays, lastComputedDate: latestFresh }
-        }
-
-        const gapStart = c.lastComputedDate
-          ? new Date(
-              parseInt(c.lastComputedDate.slice(0, 4)),
-              parseInt(c.lastComputedDate.slice(5, 7)) - 1,
-              parseInt(c.lastComputedDate.slice(8, 10)) + 1
-            )
-          : new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY)
-
-        if (gapStart.getTime() <= yesterdayEnd.getTime()) {
-          const gapRange: DateRange = { start: gapStart, end: yesterdayEnd }
-          const gapProjects = filterProjectsByName(await parseAllSessions(gapRange, 'all'), opts.project, opts.exclude)
-          const gapDays = aggregateProjectsIntoDays(gapProjects)
-          c = addNewDays(c, gapDays, yesterdayStr)
-          await saveDailyCache(c)
-        }
-        return c
-      })
-
-      // CURRENT PERIOD DATA
-      // - .all provider: assemble from cache + today (fast)
-      // - specific provider: parse the period range with provider filter (correct, but slower)
-      let currentData: PeriodData
-      let scanProjects: ProjectSummary[]
-      let scanRange: DateRange
-
-      if (isAllProviders) {
-        // Parse only today's sessions; historical data comes from cache to avoid double-counting
-        const todayRange: DateRange = { start: todayStart, end: new Date() }
-        const todayProjects = fp(await parseAllSessions(todayRange, 'all'))
-        const todayDays = aggregateProjectsIntoDays(todayProjects)
-        const rangeStartStr = toDateString(periodInfo.range.start)
-        const rangeEndStr = toDateString(periodInfo.range.end)
-        const historicalDays = getDaysInRange(cache, rangeStartStr, yesterdayStr)
-        const todayInRange = todayDays.filter(d => d.date >= rangeStartStr && d.date <= rangeEndStr)
-        const allDays = [...historicalDays, ...todayInRange].sort((a, b) => a.date.localeCompare(b.date))
-        currentData = buildPeriodDataFromDays(allDays, periodInfo.label)
-        scanProjects = todayProjects
-        scanRange = periodInfo.range
-      } else {
-        const projects = fp(await parseAllSessions(periodInfo.range, pf))
-        currentData = buildPeriodData(periodInfo.label, projects)
-        scanProjects = projects
-        scanRange = periodInfo.range
-      }
-
-      // PROVIDERS
-      // For .all: enumerate every provider with cost across the period (from cache) + installed-but-zero.
-      // For specific: just this single provider with its scoped cost.
-      const allProviders = await getAllProviders()
-      const displayNameByName = new Map(allProviders.map(p => [p.name, p.displayName]))
-      const providers: ProviderCost[] = []
-      if (isAllProviders) {
-        // Parse only today; historical provider costs come from cache
-        const todayRangeForProviders: DateRange = { start: todayStart, end: new Date() }
-        const todayDaysForProviders = aggregateProjectsIntoDays(fp(await parseAllSessions(todayRangeForProviders, 'all')))
-        const rangeStartStr = toDateString(periodInfo.range.start)
-        const todayStr = toDateString(todayStart)
-        const allDaysForProviders = [
-          ...getDaysInRange(cache, rangeStartStr, yesterdayStr),
-          ...todayDaysForProviders.filter(d => d.date === todayStr),
-        ]
-        const providerTotals: Record<string, number> = {}
-        for (const d of allDaysForProviders) {
-          for (const [name, p] of Object.entries(d.providers)) {
-            providerTotals[name] = (providerTotals[name] ?? 0) + p.cost
-          }
-        }
-        for (const [name, cost] of Object.entries(providerTotals)) {
-          providers.push({ name: displayNameByName.get(name) ?? name, cost })
-        }
-        for (const p of allProviders) {
-          if (providers.some(pc => pc.name === p.displayName)) continue
-          const sources = await p.discoverSessions()
-          if (sources.length > 0) providers.push({ name: p.displayName, cost: 0 })
-        }
-      } else {
-        const display = displayNameByName.get(pf) ?? pf
-        providers.push({ name: display, cost: currentData.cost })
-      }
-
-      // DAILY HISTORY (last 365 days)
-      // Cache stores per-provider cost+calls per day in DailyEntry.providers, so we can derive
-      // a provider-filtered history without re-parsing. Tokens aren't broken down per provider
-      // in the cache, so the filtered view shows zero tokens (heatmap/trend still works on cost).
-      const historyStartStr = toDateString(new Date(todayStart.getTime() - BACKFILL_DAYS * MS_PER_DAY))
-      const allCacheDays = getDaysInRange(cache, historyStartStr, yesterdayStr)
-      // Parse only today for history; historical days come from cache
-      const todayRangeForHistory: DateRange = { start: todayStart, end: new Date() }
-      const allTodayDaysForHistory = aggregateProjectsIntoDays(fp(await parseAllSessions(todayRangeForHistory, 'all')))
-      const todayStrForHistory = toDateString(todayStart)
-      const fullHistory = [...allCacheDays, ...allTodayDaysForHistory.filter(d => d.date === todayStrForHistory)]
-      const dailyHistory = fullHistory.map(d => {
-        if (isAllProviders) {
-          const topModels = Object.entries(d.models)
-            .filter(([name]) => name !== '<synthetic>')
-            .sort(([, a], [, b]) => b.cost - a.cost)
-            .slice(0, 5)
-            .map(([name, m]) => ({
-              name,
-              cost: m.cost,
-              calls: m.calls,
-              inputTokens: m.inputTokens,
-              outputTokens: m.outputTokens,
-            }))
-          return {
-            date: d.date,
-            cost: d.cost,
-            calls: d.calls,
-            inputTokens: d.inputTokens,
-            outputTokens: d.outputTokens,
-            cacheReadTokens: d.cacheReadTokens,
-            cacheWriteTokens: d.cacheWriteTokens,
-            topModels,
-          }
-        }
-        const prov = d.providers[pf] ?? { calls: 0, cost: 0 }
-        return {
-          date: d.date,
-          cost: prov.cost,
-          calls: prov.calls,
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-          topModels: [],
-        }
-      })
-
-      const optimize = opts.optimize === false ? null : await scanAndDetect(scanProjects, scanRange)
-      console.log(JSON.stringify(buildMenubarPayload(currentData, providers, optimize, dailyHistory)))
-      return
-    }
 
     if (opts.format === 'json') {
       const todayData = buildPeriodData('today', fp(await parseAllSessions(getDateRange('today').range, pf)))
@@ -609,7 +434,7 @@ program
       return
     }
 
-    const defaultName = `codeburn-${toDateString(new Date())}`
+    const defaultName = `burnrate-${toDateString(new Date())}`
     const outputPath = opts.output ?? `${defaultName}.${opts.format}`
 
     let savedPath: string
@@ -620,7 +445,7 @@ program
         savedPath = await exportCsv(periods, outputPath)
       }
     } catch (err) {
-      // Protection guards in export.ts (symlink refusal, non-codeburn folder refusal, etc.)
+      // Protection guards in export.ts (symlink refusal, non-burnrate folder refusal, etc.)
       // throw with a user-readable message. Print just the message, not the stack, so the CLI
       // doesn't spray its internals at the user.
       const message = err instanceof Error ? err.message : String(err)
@@ -632,23 +457,8 @@ program
   })
 
 program
-  .command('menubar')
-  .description('Install and launch the macOS menubar app (one command, no clone)')
-  .option('--force', 'Reinstall even if an older copy is already in ~/Applications')
-  .action(async (opts: { force?: boolean }) => {
-    try {
-      const result = await installMenubarApp({ force: opts.force })
-      console.log(`\n  Ready. ${result.installedPath}\n`)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error(`\n  Menubar install failed: ${message}\n`)
-      process.exit(1)
-    }
-  })
-
-program
   .command('currency [code]')
-  .description('Set display currency (e.g. codeburn currency GBP)')
+  .description('Set display currency (e.g. burnrate currency GBP)')
   .option('--symbol <symbol>', 'Override the currency symbol')
   .option('--reset', 'Reset to USD (removes currency config)')
   .action(async (code?: string, opts?: { symbol?: string; reset?: boolean }) => {
@@ -699,7 +509,7 @@ program
 
 program
   .command('model-alias [from] [to]')
-  .description('Map a provider model name to a canonical one for pricing (e.g. codeburn model-alias my-model claude-opus-4-6)')
+  .description('Map a provider model name to a canonical one for pricing (e.g. burnrate model-alias my-model claude-opus-4-6)')
   .option('--remove <from>', 'Remove an alias')
   .option('--list', 'List configured aliases')
   .action(async (from?: string, to?: string, opts?: { remove?: string; list?: boolean }) => {
@@ -735,7 +545,7 @@ program
     }
 
     if (!from || !to) {
-      console.error('\n  Usage: codeburn model-alias <from> <to>\n')
+      console.error('\n  Usage: burnrate model-alias <from> <to>\n')
       process.exitCode = 1
       return
     }
@@ -794,7 +604,7 @@ program
     }
 
     if (mode !== 'set') {
-      console.error('\n  Usage: codeburn plan [set <id> | reset]\n')
+      console.error('\n  Usage: burnrate plan [set <id> | reset]\n')
       process.exitCode = 1
       return
     }
@@ -864,42 +674,6 @@ program
     console.log(`  Provider: ${preset.provider}`)
     console.log(`  Reset day: ${resetDay}`)
     console.log(`  Config saved to ${getConfigFilePath()}\n`)
-  })
-
-program
-  .command('optimize')
-  .description('Find token waste and get exact fixes')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', '30days')
-  .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
-  .action(async (opts) => {
-    await loadPricing()
-    const { range, label } = getDateRange(opts.period)
-    const projects = await parseAllSessions(range, opts.provider)
-    await runOptimize(projects, label, range)
-  })
-
-program
-  .command('compare')
-  .description('Compare two AI models side-by-side')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'all')
-  .option('--provider <provider>', 'Filter by provider: all, claude, codex, cursor', 'all')
-  .action(async (opts) => {
-    await loadPricing()
-    const { range } = getDateRange(opts.period)
-    await renderCompare(range, opts.provider)
-  })
-
-program
-  .command('yield')
-  .description('Track which AI spend shipped to main vs reverted/abandoned (experimental)')
-  .option('-p, --period <period>', 'Analysis period: today, week, 30days, month, all', 'week')
-  .action(async (opts) => {
-    const { computeYield, formatYieldSummary } = await import('./yield.js')
-    await loadPricing()
-    const { range, label } = getDateRange(opts.period)
-    console.log(`\n  Analyzing yield for ${label}...\n`)
-    const summary = await computeYield(range, process.cwd())
-    console.log(formatYieldSummary(summary))
   })
 
 program.parse()

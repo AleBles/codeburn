@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 
 import { filterProjectsByName } from '../src/parser.js'
 import type { ProjectSummary } from '../src/types.js'
@@ -15,9 +15,9 @@ function makeProject(project: string, projectPath = project): ProjectSummary {
 
 describe('filterProjectsByName', () => {
   const projects = [
-    makeProject('codeburn', '/Users/alice/codeburn'),
-    makeProject('AgentSeal', '/Users/alice/projects/AgentSeal'),
-    makeProject('dashboard', '/Users/alice/AgentSeal/dashboard'),
+    makeProject('burnrate', '/Users/alice/burnrate'),
+    makeProject('test', '/Users/alice/projects/test'),
+    makeProject('dashboard', '/Users/alice/test/dashboard'),
     makeProject('sandbox', '/tmp/sandbox'),
   ]
 
@@ -28,28 +28,28 @@ describe('filterProjectsByName', () => {
   })
 
   it('include matches project name (case-insensitive substring)', () => {
-    const result = filterProjectsByName(projects, ['codeburn'])
-    expect(result.map(p => p.project)).toEqual(['codeburn'])
+    const result = filterProjectsByName(projects, ['burnrate'])
+    expect(result.map(p => p.project)).toEqual(['burnrate'])
   })
 
   it('include is case-insensitive', () => {
-    const result = filterProjectsByName(projects, ['AGENTSEAL'])
-    expect(result.map(p => p.project).sort()).toEqual(['AgentSeal', 'dashboard'])
+    const result = filterProjectsByName(projects, ['test'])
+    expect(result.map(p => p.project).sort()).toEqual(['test', 'dashboard'])
   })
 
   it('include matches substring in path when name does not match', () => {
     const result = filterProjectsByName(projects, ['alice/projects'])
-    expect(result.map(p => p.project)).toEqual(['AgentSeal'])
+    expect(result.map(p => p.project)).toEqual(['test'])
   })
 
   it('include uses OR semantics across patterns', () => {
-    const result = filterProjectsByName(projects, ['codeburn', 'sandbox'])
-    expect(result.map(p => p.project).sort()).toEqual(['codeburn', 'sandbox'])
+    const result = filterProjectsByName(projects, ['burnrate', 'sandbox'])
+    expect(result.map(p => p.project).sort()).toEqual(['burnrate', 'sandbox'])
   })
 
   it('exclude removes matching projects (AND-negation across patterns)', () => {
-    const result = filterProjectsByName(projects, undefined, ['codeburn', 'sandbox'])
-    expect(result.map(p => p.project).sort()).toEqual(['AgentSeal', 'dashboard'])
+    const result = filterProjectsByName(projects, undefined, ['burnrate', 'sandbox'])
+    expect(result.map(p => p.project).sort()).toEqual(['test', 'dashboard'])
   })
 
   it('exclude matches path substring', () => {
@@ -58,8 +58,8 @@ describe('filterProjectsByName', () => {
   })
 
   it('exclude is applied after include', () => {
-    const result = filterProjectsByName(projects, ['AgentSeal'], ['dashboard'])
-    expect(result.map(p => p.project)).toEqual(['AgentSeal'])
+    const result = filterProjectsByName(projects, ['test'], ['dashboard'])
+    expect(result.map(p => p.project)).toEqual(['test'])
   })
 
   it('returns empty array when no project matches include', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { providers, getAllProviders } from '../src/providers/index.js'
 
 describe('provider registry', () => {

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 
 import { clearPlan, readPlan, savePlan } from '../src/config.js'
 import { getPresetPlan, isPlanId, isPlanProvider } from '../src/plans.js'
@@ -28,7 +28,7 @@ describe('plan presets', () => {
 
 describe('plan config persistence', () => {
   it('round-trips savePlan/readPlan and clearPlan', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'codeburn-plan-test-'))
+    const dir = await mkdtemp(join(tmpdir(), 'burnrate-plan-test-'))
     const previousHome = process.env['HOME']
     process.env['HOME'] = dir
 

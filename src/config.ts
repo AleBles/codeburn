@@ -13,7 +13,7 @@ export type Plan = {
   setAt: string
 }
 
-export type CodeburnConfig = {
+export type BurnRateConfig = {
   currency?: {
     code: string
     symbol?: string
@@ -23,23 +23,23 @@ export type CodeburnConfig = {
 }
 
 function getConfigDir(): string {
-  return join(homedir(), '.config', 'codeburn')
+  return join(homedir(), '.config', 'burnrate')
 }
 
 function getConfigPath(): string {
   return join(getConfigDir(), 'config.json')
 }
 
-export async function readConfig(): Promise<CodeburnConfig> {
+export async function readConfig(): Promise<BurnRateConfig> {
   try {
     const raw = await readFile(getConfigPath(), 'utf-8')
-    return JSON.parse(raw) as CodeburnConfig
+    return JSON.parse(raw) as BurnRateConfig
   } catch {
     return {}
   }
 }
 
-export async function saveConfig(config: CodeburnConfig): Promise<void> {
+export async function saveConfig(config: BurnRateConfig): Promise<void> {
   await mkdir(getConfigDir(), { recursive: true })
   const configPath = getConfigPath()
   const tmpPath = `${configPath}.tmp`

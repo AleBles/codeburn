@@ -128,13 +128,13 @@ function createParser(
       try {
         db = openDatabase(dbPath)
       } catch (err) {
-        process.stderr.write(`codeburn: cannot open OpenCode database: ${err instanceof Error ? err.message : err}\n`)
+        process.stderr.write(`burnrate: cannot open OpenCode database: ${err instanceof Error ? err.message : err}\n`)
         return
       }
 
       try {
         if (!validateSchema(db)) {
-          process.stderr.write('codeburn: OpenCode storage format not recognized. You may need to update CodeBurn.\n')
+          process.stderr.write('burnrate: OpenCode storage format not recognized. You may need to update BurnRate.\n')
           return
         }
 
