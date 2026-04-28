@@ -3,6 +3,7 @@ import { homedir } from 'os'
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { render, Box, Text, useInput, useApp, useWindowSize } from 'ink'
 import { CATEGORY_LABELS, type DateRange, type ProjectSummary, type TaskCategory } from './types.js'
+import { ScrollPanel } from './components/scroll-panel'
 import { formatCost, formatTokens } from './format.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { loadPricing } from './models.js'
@@ -146,7 +147,7 @@ const PANEL_CHROME = 4
 
 function Panel({ title, color, children, width }: { title: string; color: string; children: React.ReactNode; width: number }) {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} width={width} overflowX="hidden">
+    <Box flexDirection="column" borderStyle="round" borderColor={color} paddingX={1} width={width}>
       <Text bold color={color}>{title}</Text>
       {children}
     </Box>
@@ -571,11 +572,12 @@ function OptimizeView({ findings, costRate, projects, label, width, healthScore,
 function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable, compareAvailable }: { width: number; showProvider?: boolean; view?: View; findingCount?: number; optimizeAvailable?: boolean; compareAvailable?: boolean }) {
   const isOptimize = view === 'optimize'
   return (
-    <Box borderStyle="round" borderColor={DIM} width={width} justifyContent="center" paddingX={1}>
+    <Box borderStyle="round" borderColor={DIM} width={width} flexDirection="column" alignItems="center" paddingX={1}>
       <Text>
         {isOptimize
           ? <><Text color={ORANGE} bold>b</Text><Text dimColor> back   </Text></>
           : <><Text color={ORANGE} bold>{'<'}</Text><Text color={ORANGE}>{'>'}</Text><Text dimColor> switch   </Text></>}
+        <Text color={ORANGE} bold>{'↑ / PgUp'}</Text><Text color={ORANGE}>{'↓ / PgDn'}</Text><Text dimColor> scroll </Text>
         <Text color={ORANGE} bold>q</Text><Text dimColor> quit   </Text>
         <Text color={ORANGE} bold>1</Text><Text dimColor> today   </Text>
         <Text color={ORANGE} bold>2</Text><Text dimColor> week   </Text>
@@ -599,14 +601,15 @@ function Row({ wide, width, children }: { wide: boolean; width: number; children
   return <>{children}</>
 }
 
-function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsage }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsage?: PlanUsage }) {
+const FIXED_ROWS = 10 // PeriodTabs(1) + Overview(5) + StatusBar(4)
+function DashboardContent({ projects, period, columns, activeProvider, budgets, planUsage, scrollHeight  }: { projects: ProjectSummary[]; period: Period; columns?: number; activeProvider?: string; budgets?: Map<string, ContextBudget>; planUsage?: PlanUsage; scrollHeight?: number }) {
   const { dashWidth, wide, halfWidth, barWidth } = getLayout(columns)
   const isCursor = activeProvider === 'cursor'
   if (projects.length === 0) return <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>No usage data found for {PERIOD_LABELS[period]}.</Text></Panel>
   const pw = wide ? halfWidth : dashWidth
   const days = period === 'all' ? undefined : (period === 'month' || period === '30days' ? 31 : 14)
-  return (
-    <Box flexDirection="column" width={dashWidth}>
+  const content = (
+    <>
       <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} planUsage={planUsage} />
       <Row wide={wide} width={dashWidth}><DailyActivity projects={projects} days={days} pw={pw} bw={barWidth} /><ProjectBreakdown projects={projects} pw={pw} bw={barWidth} budgets={budgets} /></Row>
       <TopSessions projects={projects} pw={dashWidth} bw={barWidth} />
@@ -616,7 +619,17 @@ function DashboardContent({ projects, period, columns, activeProvider, budgets, 
       ) : (
         <><Row wide={wide} width={dashWidth}><ToolBreakdown projects={projects} pw={pw} bw={barWidth} /><BashBreakdown projects={projects} pw={pw} bw={barWidth} /></Row><McpBreakdown projects={projects} pw={dashWidth} bw={barWidth} /></>
       )}
-    </Box>
+    </>
+  )
+  return (
+      <Box flexDirection="column" width={dashWidth}>
+        <Overview projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} />
+        {scrollHeight != null ? (
+            <ScrollPanel height={scrollHeight}>{content}</ScrollPanel>
+        ) : (
+            content
+        )}
+      </Box>
   )
 }
 
@@ -640,6 +653,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const [projectBudgets, setProjectBudgets] = useState<Map<string, ContextBudget>>(new Map())
   const [planUsage, setPlanUsage] = useState<PlanUsage | undefined>(initialPlanUsage)
   const { columns } = useWindowSize()
+  const totalRows = Math.max(process.stdout.rows, FIXED_ROWS)
   const { dashWidth } = getLayout(columns)
   const multipleProviders = detectedProviders.length > 1
   const optimizeAvailable = activeProvider === 'all' || activeProvider === 'claude'
@@ -650,6 +664,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reloadGenerationRef = useRef(0)
   const findingCount = optimizeResult?.findings.length ?? 0
+  const scrollHeight = totalRows - FIXED_ROWS
 
   useEffect(() => {
     let cancelled = false
@@ -759,7 +774,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
 
   if (loading) {
     return (
-      <Box flexDirection="column" width={dashWidth}>
+      <Box flexDirection="column" width={dashWidth} height={totalRows}>
         <PeriodTabs active={period} providerName={activeProvider} showProvider={view !== 'compare' && multipleProviders} />
         {view === 'compare'
           ? <Box flexDirection="column" paddingX={2} paddingY={1}>
@@ -776,13 +791,13 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   }
 
   return (
-    <Box flexDirection="column" width={dashWidth}>
+    <Box flexDirection="column" width={dashWidth} height={totalRows}>
       <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders && view !== 'compare'} />
       {view === 'compare'
         ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
         : view === 'optimize' && optimizeResult
           ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} />
-          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsage={planUsage} />}
+          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} planUsage={planUsage} scrollHeight={scrollHeight}/>}
       {view !== 'compare' && <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} />}
     </Box>
   )
